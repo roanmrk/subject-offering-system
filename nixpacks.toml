@@ -1,0 +1,8 @@
+[variables]
+NIXPACKS_JDK_VERSION = "17"
+
+[phases.build]
+cmds = ["cd backend && mvn clean package -DskipTests"]
+
+[phases.start]
+cmd = "java -Dserver.port=$PORT -jar backend/target/scheduler-1.0.0.jar"
