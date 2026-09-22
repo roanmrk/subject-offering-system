@@ -4,21 +4,18 @@ import axios from 'axios';
 // BASE URL CONFIGURATION
 // ============================================================
 // In DEVELOPMENT (npm start on localhost:3000):
-//   → React runs on port 3000, Spring Boot runs on port 8080
+//   → React runs on 3000, Spring Boot runs on 8080
 //   → We must call http://localhost:8080 explicitly
 //
 // In PRODUCTION (bundled inside Spring Boot JAR):
 //   → Both frontend and backend share the SAME origin
-//   → We use window.location.origin so it "just works" on any domain
+//   → We use window.location.origin so it works on any domain
 // ============================================================
 
 const getBaseURL = () => {
-  // If running on the React dev server (port 3000), point to Spring Boot
   if (window.location.port === '3000') {
     return 'http://localhost:8080';
   }
-
-  // Otherwise (production, or when served from Spring Boot), use same origin
   return window.location.origin;
 };
 

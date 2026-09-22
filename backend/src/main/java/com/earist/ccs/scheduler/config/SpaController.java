@@ -8,8 +8,8 @@ import org.springframework.web.bind.annotation.RequestMethod;
 public class SpaController {
 
     /**
-     * Forward all non-API GET requests to index.html so React Router handles routing.
-     * Matches paths that do NOT contain a dot (i.e., not static files like .js, .css, .png).
+     * Forward all non-API, non-static GET requests to index.html
+     * so React Router handles client-side routing.
      */
     @RequestMapping(value = {"/", "/{path:[^\\.]*}"}, method = RequestMethod.GET)
     public String forward() {
