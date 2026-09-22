@@ -88,6 +88,7 @@ public class JwtFilter extends OncePerRequestFilter {
      * Returns true if the path is public (no JWT needed).
      */
     private boolean isPublicPath(String path) {
+
         // ============================================
         // API public endpoints
         // ============================================
@@ -111,14 +112,19 @@ public class JwtFilter extends OncePerRequestFilter {
 
         // ============================================
         // Frontend client-side routes
-        // (these get forwarded to index.html)
         // ============================================
         if (path.equals("/login")) return true;
         if (path.equals("/forgot-password")) return true;
         if (path.equals("/register")) return true;
+        if (path.equals("/dashboard")) return true;
+        if (path.equals("/admin-dashboard")) return true;
+        if (path.equals("/faculty-dashboard")) return true;
+        if (path.equals("/faculty-profile")) return true;
+        if (path.equals("/faculty-timetable")) return true;
+        if (path.startsWith("/print-schedule")) return true;   // ⭐ FIX
 
         // ============================================
-        // File extensions — always public (js, css, png, etc.)
+        // File extensions — always public
         // ============================================
         if (path.matches(".*\\.(js|css|png|jpg|jpeg|gif|svg|ico|woff|woff2|ttf|eot|map|json)$")) {
             return true;

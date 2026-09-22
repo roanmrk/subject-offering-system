@@ -51,12 +51,17 @@ public class SecurityConfig {
 
                 // ============================================
                 // PUBLIC — React client-side routes
-                // (SpaController forwards these to index.html)
                 // ============================================
                 .requestMatchers(
                     "/login",
                     "/forgot-password",
-                    "/register"
+                    "/register",
+                    "/dashboard",
+                    "/admin-dashboard",
+                    "/faculty-dashboard",
+                    "/faculty-profile",
+                    "/faculty-timetable",
+                    "/print-schedule"          // ⭐ FIX
                 ).permitAll()
 
                 // ============================================
