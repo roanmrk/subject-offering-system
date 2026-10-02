@@ -8,6 +8,9 @@ import { useToast } from './Toast';
 import PageBackground from './Background/PageBackground';
 import './Dashboard.css';
 
+// Dark-theme-friendly conflict row background
+const CONFLICT_ROW_BG = 'rgba(153, 27, 27, 0.18)';
+
 const generateAcademicYears = () => {
   const currentYear = new Date().getFullYear();
   const years = [];
@@ -54,73 +57,72 @@ const AdminDashboard = () => {
     }
   };
 
-    return (
+  return (
     <div className="dashboard-container" style={{ position: 'relative' }}>
       <PageBackground variant="dark" />
 
       <div style={{ position: 'relative', zIndex: 1 }}>
-      <nav className="dashboard-nav">
-        <div className="nav-left">
-          <Link to="/" className="nav-back">
-            <i className="fas fa-arrow-left"></i> Back to Home
-          </Link>
-          <span className="nav-title">
-            <i className="fas fa-user-shield"></i> Admin Panel
-          </span>
-        </div>
-        <div className="nav-right">
-          <span className="status-dot" title="All systems operational"></span>
-          <span className="status-text">System Online</span>
-          {user && (
-            <span className="user-badge">
-              <i className="fas fa-user"></i> {user.name} ({user.role})
+        <nav className="dashboard-nav">
+          <div className="nav-left">
+            <Link to="/" className="nav-back">
+              <i className="fas fa-arrow-left"></i> Back to Home
+            </Link>
+            <span className="nav-title">
+              <i className="fas fa-user-shield"></i> Admin Panel
             </span>
-          )}
-          <button className="logout-btn" onClick={handleLogout}>
-            <i className="fas fa-sign-out-alt"></i> Logout
-          </button>
+          </div>
+          <div className="nav-right">
+            <span className="status-dot" title="All systems operational"></span>
+            <span className="status-text">System Online</span>
+            {user && (
+              <span className="user-badge">
+                <i className="fas fa-user"></i> {user.name} ({user.role})
+              </span>
+            )}
+            <button className="logout-btn" onClick={handleLogout}>
+              <i className="fas fa-sign-out-alt"></i> Logout
+            </button>
+          </div>
+        </nav>
+
+        <div className="admin-layout">
+          <aside className="admin-sidebar">
+            <button className={`admin-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
+              <i className="fas fa-chart-simple"></i> Dashboard
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'courses' ? 'active' : ''}`} onClick={() => setActiveTab('courses')}>
+              <i className="fas fa-book"></i> Courses
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'faculty' ? 'active' : ''}`} onClick={() => setActiveTab('faculty')}>
+              <i className="fas fa-users"></i> Faculty
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'rooms' ? 'active' : ''}`} onClick={() => setActiveTab('rooms')}>
+              <i className="fas fa-building"></i> Rooms
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'timeslots' ? 'active' : ''}`} onClick={() => setActiveTab('timeslots')}>
+              <i className="fas fa-clock"></i> Time Slots
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'sections' ? 'active' : ''}`} onClick={() => setActiveTab('sections')}>
+              <i className="fas fa-layer-group"></i> Sections
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'subject-offerings' ? 'active' : ''}`} onClick={() => setActiveTab('subject-offerings')}>
+              <i className="fas fa-th-list"></i> Subject Offerings
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'metrics' ? 'active' : ''}`} onClick={() => setActiveTab('metrics')}>
+              <i className="fas fa-chart-line"></i> Reports & Metrics
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'activity' ? 'active' : ''}`} onClick={() => setActiveTab('activity')}>
+              <i className="fas fa-history"></i> Activity Log
+            </button>
+            <button className={`admin-nav-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>
+              <i className="fas fa-user-cog"></i> Users
+            </button>
+          </aside>
+
+          <main className="admin-content">
+            {renderContent()}
+          </main>
         </div>
-      </nav>
-
-      <div className="admin-layout">
-        <aside className="admin-sidebar">
-          <button className={`admin-nav-item ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>
-            <i className="fas fa-chart-simple"></i> Dashboard
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'courses' ? 'active' : ''}`} onClick={() => setActiveTab('courses')}>
-            <i className="fas fa-book"></i> Courses
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'faculty' ? 'active' : ''}`} onClick={() => setActiveTab('faculty')}>
-            <i className="fas fa-users"></i> Faculty
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'rooms' ? 'active' : ''}`} onClick={() => setActiveTab('rooms')}>
-            <i className="fas fa-building"></i> Rooms
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'timeslots' ? 'active' : ''}`} onClick={() => setActiveTab('timeslots')}>
-            <i className="fas fa-clock"></i> Time Slots
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'sections' ? 'active' : ''}`} onClick={() => setActiveTab('sections')}>
-            <i className="fas fa-layer-group"></i> Sections
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'subject-offerings' ? 'active' : ''}`} onClick={() => setActiveTab('subject-offerings')}>
-            <i className="fas fa-th-list"></i> Subject Offerings
-          </button>
-         
-                    <button className={`admin-nav-item ${activeTab === 'metrics' ? 'active' : ''}`} onClick={() => setActiveTab('metrics')}>
-            <i className="fas fa-chart-line"></i> Reports & Metrics
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'activity' ? 'active' : ''}`} onClick={() => setActiveTab('activity')}>
-            <i className="fas fa-history"></i> Activity Log
-          </button>
-          <button className={`admin-nav-item ${activeTab === 'users' ? 'active' : ''}`} onClick={() => setActiveTab('users')}>
-            <i className="fas fa-user-cog"></i> Users
-          </button>
-                       </aside>
-
-        <main className="admin-content">
-          {renderContent()}
-        </main>
-      </div>
       </div>
     </div>
   );
@@ -142,15 +144,16 @@ const MergedDashboard = () => {
     totalCourses: 0, totalFaculty: 0, totalRooms: 0, totalSections: 0
   });
 
-   
-   useEffect(() => { 
-    fetchStats(); 
+  useEffect(() => {
+    fetchStats();
     loadExistingSchedule();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Auto-reload the schedule when semester/year changes
   useEffect(() => {
     loadExistingSchedule();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSemester, selectedYear]);
 
   const fetchStats = async () => {
@@ -173,6 +176,23 @@ const MergedDashboard = () => {
   };
 
   const loadExistingSchedule = async () => {
+    const cacheKey = `schedule_${selectedSemester}_${selectedYear}`;
+
+    // Try sessionStorage first (has conflict reasons if just generated)
+    try {
+      const cached = sessionStorage.getItem(cacheKey);
+      if (cached) {
+        const parsed = JSON.parse(cached);
+        if (parsed && parsed.entries && parsed.entries.length > 0) {
+          setSchedule(parsed);
+          return;
+        }
+      }
+    } catch (err) {
+      console.warn('sessionStorage restore failed:', err);
+    }
+
+    // Fallback: fetch from DB (won't have conflict reasons)
     try {
       const res = await api.get(
         `/api/schedule/view?semester=${encodeURIComponent(selectedSemester)}&academicYear=${selectedYear}`
@@ -210,6 +230,16 @@ const MergedDashboard = () => {
       );
       setSchedule(response.data);
 
+      // Persist to sessionStorage so conflicts survive navigation
+      try {
+        sessionStorage.setItem(
+          `schedule_${selectedSemester}_${selectedYear}`,
+          JSON.stringify(response.data)
+        );
+      } catch (err) {
+        console.warn('sessionStorage save failed:', err);
+      }
+
       const conflicts = response.data.conflictCount || 0;
       const cfsr = response.data.metrics?.cfsr || 0;
 
@@ -232,7 +262,7 @@ const MergedDashboard = () => {
     }
   };
 
-    const resetAndRegenerate = async () => {
+  const resetAndRegenerate = async () => {
     // Check how many offerings exist for the selected semester/year
     let existingCount = 0;
     try {
@@ -265,11 +295,30 @@ const MergedDashboard = () => {
         `/api/schedule/reset?semester=${encodeURIComponent(selectedSemester)}&academicYear=${selectedYear}`
       );
 
+      // Clear stale cache after reset so we don't restore old data
+      try {
+        sessionStorage.removeItem(
+          `schedule_${selectedSemester}_${selectedYear}`
+        );
+      } catch (err) {
+        // ignore
+      }
+
       const response = await api.post(
         `/api/schedule/generate?semester=${encodeURIComponent(selectedSemester)}&academicYear=${selectedYear}&random=true`
       );
 
       setSchedule(response.data);
+
+      // Persist to sessionStorage so conflicts survive navigation
+      try {
+        sessionStorage.setItem(
+          `schedule_${selectedSemester}_${selectedYear}`,
+          JSON.stringify(response.data)
+        );
+      } catch (err) {
+        console.warn('sessionStorage save failed:', err);
+      }
 
       const conflicts = response.data.conflictCount || 0;
       const cfsr = response.data.metrics?.cfsr || 0;
@@ -376,11 +425,15 @@ const MergedDashboard = () => {
       headStyles: { fillColor: [26, 26, 26], textColor: [255, 255, 255], fontSize: 7, fontStyle: 'bold', halign: 'center' },
       alternateRowStyles: { fillColor: [252, 249, 242] },
       columnStyles: {
-        0: { cellWidth: 8, halign: 'center' }, 1: { cellWidth: 22, halign: 'center' },
-        2: { cellWidth: 40 }, 3: { cellWidth: 22, halign: 'center' },
-        4: { cellWidth: 22, halign: 'center' }, 5: { cellWidth: 28, halign: 'center' },
-        6: { cellWidth: 18, halign: 'center' }, 7: { cellWidth: 32 },
-        8: { cellWidth: 25, halign: 'center' }
+        0: { cellWidth: 8,  halign: 'center' },
+        1: { cellWidth: 20, halign: 'center' },
+        2: { cellWidth: 35 },
+        3: { cellWidth: 20, halign: 'center' },
+        4: { cellWidth: 20, halign: 'center' },
+        5: { cellWidth: 34, halign: 'center' },
+        6: { cellWidth: 16, halign: 'center' },
+        7: { cellWidth: 30 },
+        8: { cellWidth: 20, halign: 'center' }
       }
     });
 
@@ -398,13 +451,13 @@ const MergedDashboard = () => {
     const daySummary = days.map(d => `${d.substring(0, 3)}: ${dayDistribution[d] || 0}`).join(' | ');
     const totalMs = schedule.timings?.totalMs || schedule.generationTimeMs || 0;
 
-    const timeText = totalMs > 0 
-  ? ` | Generated: ${totalMs}ms` 
-  : '';
-doc.text(
-  `Total: ${cleanEntries.length} sections | Conflicts: ${conflictCount}${timeText}`,
-  pageWidth / 2, finalY, { align: 'center' }
-);
+    const timeText = totalMs > 0
+      ? ` | Generated: ${totalMs}ms`
+      : '';
+    doc.text(
+      `Total: ${cleanEntries.length} sections | Conflicts: ${conflictCount}${timeText}`,
+      pageWidth / 2, finalY, { align: 'center' }
+    );
     doc.setTextColor(150, 150, 150);
     doc.text(`Distribution: ${daySummary}`, pageWidth / 2, finalY + 5, { align: 'center' });
 
@@ -479,7 +532,7 @@ doc.text(
             className="btn-secondary"
             onClick={resetAndRegenerate}
             disabled={loading}
-            style={{ background: '#fff3e0', borderColor: '#ffcc80', color: '#e65100' }}
+            style={{ background: 'rgba(255, 152, 0, 0.15)', borderColor: 'rgba(255, 152, 0, 0.4)', color: '#ffb74d' }}
           >
             <i className="fas fa-redo"></i> Reset & Regenerate
           </button>
@@ -516,7 +569,7 @@ doc.text(
               <button
                 className="btn-export"
                 onClick={() => window.open(`/print-schedule?semester=${encodeURIComponent(selectedSemester)}&academicYear=${selectedYear}`, '_blank')}
-                style={{ background: '#1976d2', color: '#fff', border: 'none' }}
+                style={{ background: 'rgba(25, 118, 210, 0.25)', color: '#64B5F6', border: '1px solid rgba(100, 181, 246, 0.3)' }}
               >
                 <i className="fas fa-print"></i> Print View
               </button>
@@ -540,7 +593,13 @@ doc.text(
               <tbody>
                 {filteredEntries.length > 0 ? (
                   filteredEntries.map((entry, index) => (
-                    <tr key={index} style={{ backgroundColor: !entry.isConflictFree ? '#ffebee' : 'transparent' }}>
+                    <tr
+                      key={index}
+                      style={{
+                        backgroundColor: !entry.isConflictFree ? CONFLICT_ROW_BG : 'transparent',
+                        color: '#fcf9f2',
+                      }}
+                    >
                       <td>{index + 1}</td>
                       <td><span className="course-code">{entry.courseCode}</span></td>
                       <td>{entry.courseName}</td>
@@ -549,17 +608,32 @@ doc.text(
                       <td>{entry.time}</td>
                       <td>{entry.room}</td>
                       <td>{entry.faculty}</td>
-                      <td>
+                      <td style={{ maxWidth: '220px' }}>
                         {entry.isConflictFree ?
                           <span className="badge-success"><i className="fas fa-check"></i> Free</span> :
-                          <span className="badge-danger"><i className="fas fa-exclamation"></i> Conflict</span>
+                          <>
+                            <span className="badge-danger">
+                              <i className="fas fa-exclamation"></i> Conflict
+                            </span>
+                            {entry.conflictReason && (
+                              <div style={{
+                                marginTop: '6px',
+                                fontSize: '11px',
+                                color: '#ef9a9a',
+                                lineHeight: '1.4',
+                                wordBreak: 'break-word',
+                              }}>
+                                {entry.conflictReason}
+                              </div>
+                            )}
+                          </>
                         }
                       </td>
                     </tr>
                   ))
                 ) : (
                   <tr>
-                    <td colSpan="9" style={{ textAlign: 'center', padding: '40px' }}>
+                    <td colSpan="9" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>
                       {showConflicts ? '🎉 No conflicts found!' : 'No entries'}
                     </td>
                   </tr>
@@ -685,7 +759,7 @@ const CourseManagement = () => {
           <input type="number" placeholder="Year Level" value={newCourse.yearLevel} onChange={(e) => setNewCourse({...newCourse, yearLevel: parseInt(e.target.value)})} />
           <input type="number" placeholder="Semester" value={newCourse.semester} onChange={(e) => setNewCourse({...newCourse, semester: parseInt(e.target.value)})} />
           <input type="number" placeholder="Units" value={newCourse.units} onChange={(e) => setNewCourse({...newCourse, units: parseInt(e.target.value)})} />
-          <label style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#fcf9f2' }}>
             <input type="checkbox" checked={newCourse.isLaboratory} onChange={(e) => setNewCourse({...newCourse, isLaboratory: e.target.checked})} />
             Laboratory Course
           </label>
@@ -700,7 +774,7 @@ const CourseManagement = () => {
           placeholder="🔍 Search courses by code or name..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -711,10 +785,10 @@ const CourseManagement = () => {
           </thead>
           <tbody>
             {courses.length === 0 ? (
-              <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>No courses found.</td></tr>
+              <tr><td colSpan="7" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>No courses found.</td></tr>
             ) : (
               courses
-                .filter(c => 
+                .filter(c =>
                   c.courseCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   c.courseName.toLowerCase().includes(searchTerm.toLowerCase())
                 )
@@ -852,7 +926,7 @@ const FacultyManagement = () => {
           placeholder="🔍 Search faculty by name or ID..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -863,10 +937,10 @@ const FacultyManagement = () => {
           </thead>
           <tbody>
             {faculty.length === 0 ? (
-              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>No faculty found.</td></tr>
+              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>No faculty found.</td></tr>
             ) : (
               faculty
-                .filter(f => 
+                .filter(f =>
                   f.firstName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   f.lastName.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   f.facultyId.toLowerCase().includes(searchTerm.toLowerCase())
@@ -1001,7 +1075,7 @@ const RoomManagement = () => {
           placeholder="🔍 Search rooms by code or name..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -1012,10 +1086,10 @@ const RoomManagement = () => {
           </thead>
           <tbody>
             {rooms.length === 0 ? (
-              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>No rooms found.</td></tr>
+              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>No rooms found.</td></tr>
             ) : (
               rooms
-                .filter(room => 
+                .filter(room =>
                   room.roomCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   room.roomName.toLowerCase().includes(searchTerm.toLowerCase())
                 )
@@ -1146,7 +1220,7 @@ const TimeSlotManagement = () => {
           placeholder="🔍 Search by day or slot code..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -1157,10 +1231,10 @@ const TimeSlotManagement = () => {
           </thead>
           <tbody>
             {timeslots.length === 0 ? (
-              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>No time slots found.</td></tr>
+              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>No time slots found.</td></tr>
             ) : (
               timeslots
-                .filter(slot => 
+                .filter(slot =>
                   slot.day.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   (slot.slotCode || '').toLowerCase().includes(searchTerm.toLowerCase())
                 )
@@ -1308,7 +1382,7 @@ const SectionManagement = () => {
               e.target.value = '';
             }}
           />
-          <button 
+          <button
             className="btn-secondary"
             onClick={() => document.getElementById('csv-import-sections').click()}
           >
@@ -1322,30 +1396,30 @@ const SectionManagement = () => {
 
       {showForm && (
         <div className="admin-form">
-          <input 
-            type="text" 
-            placeholder="Section Code (e.g. BSCS-1A)" 
-            value={newSection.sectionCode} 
-            onChange={(e) => setNewSection({...newSection, sectionCode: e.target.value})} 
+          <input
+            type="text"
+            placeholder="Section Code (e.g. BSCS-1A)"
+            value={newSection.sectionCode}
+            onChange={(e) => setNewSection({...newSection, sectionCode: e.target.value})}
           />
-          <select 
-            value={newSection.program} 
+          <select
+            value={newSection.program}
             onChange={(e) => setNewSection({...newSection, program: e.target.value})}
           >
             <option value="BSCS">BSCS</option>
             <option value="BSInfoTech">BSInfoTech</option>
           </select>
-          <input 
-            type="number" 
-            placeholder="Year Level" 
-            value={newSection.yearLevel} 
-            onChange={(e) => setNewSection({...newSection, yearLevel: parseInt(e.target.value)})} 
+          <input
+            type="number"
+            placeholder="Year Level"
+            value={newSection.yearLevel}
+            onChange={(e) => setNewSection({...newSection, yearLevel: parseInt(e.target.value)})}
           />
-          <input 
-            type="number" 
-            placeholder="Expected Enrollment" 
-            value={newSection.expectedEnrollment} 
-            onChange={(e) => setNewSection({...newSection, expectedEnrollment: parseInt(e.target.value)})} 
+          <input
+            type="number"
+            placeholder="Expected Enrollment"
+            value={newSection.expectedEnrollment}
+            onChange={(e) => setNewSection({...newSection, expectedEnrollment: parseInt(e.target.value)})}
           />
           <button className="btn-primary" onClick={saveSection}>{editingId ? 'Update' : 'Save'}</button>
           <button className="btn-secondary" onClick={() => setShowForm(false)}>Cancel</button>
@@ -1358,7 +1432,7 @@ const SectionManagement = () => {
           placeholder="🔍 Search sections by code or program..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -1376,13 +1450,13 @@ const SectionManagement = () => {
           <tbody>
             {sections.length === 0 ? (
               <tr>
-                <td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                <td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>
                   No sections found.
                 </td>
               </tr>
             ) : (
               sections
-                .filter(sec => 
+                .filter(sec =>
                   sec.sectionCode.toLowerCase().includes(searchTerm.toLowerCase()) ||
                   sec.program.toLowerCase().includes(searchTerm.toLowerCase())
                 )
@@ -1464,9 +1538,9 @@ const SubjectOfferingManagement = () => {
     try {
       const response = await api.post('/api/admin/subject-offerings', newOffering);
       setOfferings([...offerings, response.data]);
-      setNewOffering({ 
-        sectionId: '', courseId: '', 
-        semester: '1st Semester', 
+      setNewOffering({
+        sectionId: '', courseId: '',
+        semester: '1st Semester',
         academicYear: `${new Date().getFullYear()}-${new Date().getFullYear() + 1}`
       });
       setShowForm(false);
@@ -1510,14 +1584,14 @@ const SubjectOfferingManagement = () => {
         </button>
       </div>
 
-      <p style={{ color: '#6f6f6f', marginBottom: '20px' }}>
+      <p style={{ color: '#a3a3a3', marginBottom: '20px' }}>
         A subject offering is a course assigned to a specific section. This is what gets scheduled.
       </p>
 
       {showForm && (
         <div className="admin-form">
-          <select 
-            value={newOffering.sectionId} 
+          <select
+            value={newOffering.sectionId}
             onChange={(e) => setNewOffering({...newOffering, sectionId: e.target.value})}
           >
             <option value="">Select Section</option>
@@ -1526,8 +1600,8 @@ const SubjectOfferingManagement = () => {
             ))}
           </select>
 
-          <select 
-            value={newOffering.courseId} 
+          <select
+            value={newOffering.courseId}
             onChange={(e) => setNewOffering({...newOffering, courseId: e.target.value})}
           >
             <option value="">Select Course</option>
@@ -1536,8 +1610,8 @@ const SubjectOfferingManagement = () => {
             ))}
           </select>
 
-          <select 
-            value={newOffering.semester} 
+          <select
+            value={newOffering.semester}
             onChange={(e) => setNewOffering({...newOffering, semester: e.target.value})}
           >
             <option value="1st Semester">1st Semester</option>
@@ -1545,11 +1619,11 @@ const SubjectOfferingManagement = () => {
             <option value="Summer">Summer</option>
           </select>
 
-          <input 
-            type="text" 
-            placeholder="Academic Year (e.g. 2026-2027)" 
-            value={newOffering.academicYear} 
-            onChange={(e) => setNewOffering({...newOffering, academicYear: e.target.value})} 
+          <input
+            type="text"
+            placeholder="Academic Year (e.g. 2026-2027)"
+            value={newOffering.academicYear}
+            onChange={(e) => setNewOffering({...newOffering, academicYear: e.target.value})}
           />
 
           <button className="btn-primary" onClick={saveOffering}>Save</button>
@@ -1563,7 +1637,7 @@ const SubjectOfferingManagement = () => {
           placeholder="🔍 Search by section, course, or faculty..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -1581,14 +1655,14 @@ const SubjectOfferingManagement = () => {
           <tbody>
             {offerings.length === 0 ? (
               <tr>
-                <td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+                <td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>
                   <i className="fas fa-info-circle" style={{ fontSize: '24px', marginBottom: '8px', display: 'block' }}></i>
                   No subject offerings found.
                 </td>
               </tr>
             ) : (
               offerings
-                .filter(off => 
+                .filter(off =>
                   getSectionCode(off).toLowerCase().includes(searchTerm.toLowerCase()) ||
                   getCourseCode(off).toLowerCase().includes(searchTerm.toLowerCase()) ||
                   getCourseName(off).toLowerCase().includes(searchTerm.toLowerCase())
@@ -1618,6 +1692,7 @@ const SubjectOfferingManagement = () => {
     </div>
   );
 };
+
 // ============================================================
 // ACTIVITY LOG
 // ============================================================
@@ -1702,7 +1777,7 @@ const ActivityLogContent = () => {
           </thead>
           <tbody>
             {filteredLogs.length === 0 ? (
-              <tr><td colSpan="4" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>No activity logs found</td></tr>
+              <tr><td colSpan="4" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>No activity logs found</td></tr>
             ) : (
               filteredLogs.map(log => (
                 <tr key={log.id}>
@@ -1860,7 +1935,7 @@ const UserManagement = () => {
           placeholder="🔍 Search by name, email, or role..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          style={{ width: '100%', padding: '12px 16px', border: '1px solid #d5cfc0', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif' }}
+          style={{ width: '100%', padding: '12px 16px', border: '1px solid rgba(255, 255, 255, 0.12)', borderRadius: '8px', fontSize: '14px', fontFamily: 'Open Sauce One, sans-serif', background: 'rgba(255, 255, 255, 0.06)', color: '#fcf9f2' }}
         />
       </div>
 
@@ -1871,7 +1946,7 @@ const UserManagement = () => {
           </thead>
           <tbody>
             {users.length === 0 ? (
-              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#999' }}>No users found.</td></tr>
+              <tr><td colSpan="5" style={{ textAlign: 'center', padding: '40px', color: '#a3a3a3' }}>No users found.</td></tr>
             ) : (
               users
                 .filter(user =>

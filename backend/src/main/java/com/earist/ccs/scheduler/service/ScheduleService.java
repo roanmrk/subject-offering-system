@@ -6,6 +6,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -27,7 +28,7 @@ public class ScheduleService {
     @Autowired private BacktrackingService backtrackingService;
 
     // ============================================================
-    // GENERATE SCHEDULE (5-module pipeline)
+    // GENERATE SCHEDULE
     // ============================================================
     public Map<String, Object> generateSchedule(String semester, String academicYear) {
         return generateSchedule(semester, academicYear, 0L);
@@ -49,16 +50,16 @@ public class ScheduleService {
             List<Course> courses = courseRepository.findAll();
 
             log.info("═══════════════════════════════════════════");
-            log.info("🚀 HYBRID SCHEDULING PIPELINE");
+            log.info("🚀 HYBRID SCHEDULING PIPELINE (block-aware)");
             log.info("   Semester: {} {}", semester, academicYear);
             log.info("   Sections: {} | Faculty: {} | Rooms: {} | Slots: {}",
                 sections.size(), allFaculty.size(), rooms.size(), timeSlots.size());
             log.info("   Seed: {}", seed == 0L ? "deterministic" : String.valueOf(seed));
             log.info("═══════════════════════════════════════════");
 
-            // MODULE 1: PREPROCESSING
+            // ── MODULE 1: PREPROCESSING ─────────────────────────────
             long t1 = System.currentTimeMillis();
-            DataPreprocessingService.ValidationReport prep = 
+            DataPreprocessingService.ValidationReport prep =
                 preprocessingService.validate(courses, allFaculty, rooms, sections, timeSlots);
             timings.put("preprocessingMs", System.currentTimeMillis() - t1);
 
@@ -68,10 +69,10 @@ public class ScheduleService {
                 return result;
             }
 
-            // MODULE 2: DECISION TREE
+            // ── MODULE 2: DECISION TREE + OFFERING BUILD ────────────
             long t2 = System.currentTimeMillis();
             List<SubjectOffering> offerings = buildOfferings(sections, courses, semester, academicYear);
-            
+
             Map<String, Map<String, Object>> prereqReports = new LinkedHashMap<>();
             Map<Long, List<Course>> coursesBySectionId = new HashMap<>();
             for (SubjectOffering o : offerings) {
@@ -85,16 +86,17 @@ public class ScheduleService {
             timings.put("decisionTreeMs", System.currentTimeMillis() - t2);
             log.info("🌳 [MODULE 2] DT: {} offerings built", offerings.size());
 
-            // MODULE 3: GRAPH COLORING (seeded)
+            // ── MODULE 3: GRAPH COLORING (availability-aware) ───────
             long t3 = System.currentTimeMillis();
-            GraphColoringService.ConflictGraph graph = 
+            GraphColoringService.ConflictGraph graph =
                 graphColoringService.buildConflictGraph(offerings, allFaculty, decisionTreeService);
-            GraphColoringService.ColoringResult coloring = 
-                graphColoringService.greedyColor(graph, timeSlots, seed);
+            GraphColoringService.ColoringResult coloring =
+                graphColoringService.greedyColor(graph, timeSlots, seed, allFaculty, decisionTreeService);
             timings.put("graphColoringMs", System.currentTimeMillis() - t3);
             log.info("🎨 [MODULE 3] GC: {} vertices, {} edges, chromatic={}",
                 coloring.vertexCount, coloring.edgeCount, coloring.chromaticNumber);
 
+            // Apply coloring → set STARTING timeslot for each offering
             Map<String, SubjectOffering> byId = new HashMap<>();
             for (SubjectOffering o : offerings) {
                 byId.put(GraphColoringService.offeringId(o), o);
@@ -108,31 +110,52 @@ public class ScheduleService {
 
             assignFacultyAndRooms(offerings, allFaculty, rooms);
 
-            // MODULE 4: GENETIC ALGORITHM (seeded)
+            int assignedBefore = countFullyAssigned(offerings);
+
+            // ── MODULE 4: GENETIC ALGORITHM (advisory) ─────────────
             long t4 = System.currentTimeMillis();
             geneticAlgorithmService.initialize(timeSlots, rooms, allFaculty, sections, seed);
-            GeneticAlgorithmService.GAResult gaResult = 
+            GeneticAlgorithmService.GAResult gaResult =
                 geneticAlgorithmService.optimize(coloring.coloring, seed);
             timings.put("geneticAlgorithmMs", System.currentTimeMillis() - t4);
             log.info("🧬 [MODULE 4] GA: fitness={}, gens={}",
                 Math.round(gaResult.best.fitness * 10000.0) / 10000.0, gaResult.generationsRun);
 
-            if (seed != 0L && gaResult.best != null) {
+            // Always attempt to apply GA output, but ONLY IF it does not
+            // reduce the number of fully assigned offerings (safe apply).
+            boolean gaApplied = false;
+            if (gaResult.best != null && gaResult.best.timeAssignment != null
+                && !gaResult.best.timeAssignment.isEmpty()) {
+
+                // Snapshot for rollback
+                List<SubjectOffering> snapshot = snapshotOfferings(offerings);
+
                 applyGAOptimization(offerings, gaResult.best, timeSlots, rooms, allFaculty);
-                log.info("🧬 [MODULE 4] GA output APPLIED to {} offerings",
-                    gaResult.best.timeAssignment.size());
+
+                int assignedAfter = countFullyAssigned(offerings);
+                if (assignedAfter >= assignedBefore) {
+                    gaApplied = true;
+                    log.info("🧬 [MODULE 4] GA output APPLIED ({} → {} fully assigned)",
+                        assignedBefore, assignedAfter);
+                } else {
+                    log.warn("🧬 [MODULE 4] GA output REJECTED ({} → {} fully assigned). Rolling back.",
+                        assignedBefore, assignedAfter);
+                    restoreOfferings(offerings, snapshot);
+                }
+            } else {
+                log.info("🧬 [MODULE 4] GA produced no output — skipping apply");
             }
 
-            // MODULE 4.5: REPAIR ANY CONFLICTS
+            // ── MODULE 4.5: REPAIR ─────────────────────────────────
             long t45 = System.currentTimeMillis();
             int repaired = repairGAConflicts(offerings, timeSlots, rooms, allFaculty, sections);
             timings.put("repairMs", System.currentTimeMillis() - t45);
             log.info("🔧 [MODULE 4.5] Repaired {} conflicts", repaired);
 
-            // MODULE 5: BACKTRACKING
+            // ── MODULE 5: BACKTRACKING VALIDATION ──────────────────
             long t5 = System.currentTimeMillis();
-            BacktrackingService.ValidationResult validation = 
-                backtrackingService.validateAndFinalize(offerings, timeSlots, rooms, 
+            BacktrackingService.ValidationResult validation =
+                backtrackingService.validateAndFinalize(offerings, timeSlots, rooms,
                     allFaculty, sections);
             timings.put("backtrackingMs", System.currentTimeMillis() - t5);
 
@@ -145,13 +168,16 @@ public class ScheduleService {
             metrics.put("fwor", calculateFWOR(offerings));
             metrics.put("rur", calculateRUR(offerings, rooms));
             metrics.put("hardConstraintRate", validation.hardConstraintRate());
-            int totalConflicts = validation.facultyConflicts + validation.roomConflicts 
-                + validation.capacityViolations + validation.sectionConflicts;
+            int totalConflicts = validation.facultyConflicts + validation.roomConflicts
+                + validation.capacityViolations + validation.sectionConflicts
+                + validation.unassignedOfferings + validation.workloadViolations;
             metrics.put("conflictCount", totalConflicts);
             metrics.put("facultyConflicts", validation.facultyConflicts);
             metrics.put("roomConflicts", validation.roomConflicts);
             metrics.put("capacityViolations", validation.capacityViolations);
             metrics.put("sectionConflicts", validation.sectionConflicts);
+            metrics.put("unassignedOfferings", validation.unassignedOfferings);
+            metrics.put("workloadViolations", validation.workloadViolations);
 
             Map<String, Long> dayDist = validation.entries.stream()
                 .collect(Collectors.groupingBy(e -> (String) e.get("day"),
@@ -162,6 +188,8 @@ public class ScheduleService {
             log.info("   CFSR: {}%, FWOR: {}%, RUR: {}%",
                 metrics.get("cfsr"), metrics.get("fwor"), metrics.get("rur"));
             log.info("   Conflicts: {}", totalConflicts);
+            log.info("   Unassigned: {} | Workload viols: {}",
+                validation.unassignedOfferings, validation.workloadViolations);
             log.info("   Day distribution: {}", dayDist);
             log.info("═══════════════════════════════════════════");
 
@@ -188,7 +216,7 @@ public class ScheduleService {
             result.put("geneticAlgorithm", Map.of(
                 "fitness", Math.round(gaResult.best.fitness * 10000.0) / 10000.0,
                 "generations", gaResult.generationsRun,
-                "applied", seed != 0L
+                "applied", gaApplied
             ));
             result.put("prerequisites", prereqReports);
 
@@ -201,7 +229,46 @@ public class ScheduleService {
     }
 
     // ============================================================
-    // REPAIR CONFLICTS (Module 4.5)
+    // GA APPLY HELPERS (safe apply)
+    // ============================================================
+    private int countFullyAssigned(List<SubjectOffering> offerings) {
+        int n = 0;
+        for (SubjectOffering o : offerings) {
+            if (o.getTimeslot() != null && o.getFaculty() != null && o.getRoom() != null) n++;
+        }
+        return n;
+    }
+
+    private List<SubjectOffering> snapshotOfferings(List<SubjectOffering> offerings) {
+        List<SubjectOffering> snap = new ArrayList<>();
+        for (SubjectOffering o : offerings) {
+            SubjectOffering copy = new SubjectOffering();
+            copy.setId(o.getId());
+            copy.setSection(o.getSection());
+            copy.setCourse(o.getCourse());
+            copy.setFaculty(o.getFaculty());
+            copy.setRoom(o.getRoom());
+            copy.setTimeslot(o.getTimeslot());
+            copy.setSemester(o.getSemester());
+            copy.setAcademicYear(o.getAcademicYear());
+            copy.setIsConflictFree(o.getIsConflictFree());
+            snap.add(copy);
+        }
+        return snap;
+    }
+
+    private void restoreOfferings(List<SubjectOffering> offerings, List<SubjectOffering> snapshot) {
+        for (int i = 0; i < offerings.size() && i < snapshot.size(); i++) {
+            SubjectOffering dst = offerings.get(i);
+            SubjectOffering src = snapshot.get(i);
+            dst.setTimeslot(src.getTimeslot());
+            dst.setFaculty(src.getFaculty());
+            dst.setRoom(src.getRoom());
+        }
+    }
+
+    // ============================================================
+    // REPAIR CONFLICTS
     // ============================================================
     private int repairGAConflicts(List<SubjectOffering> offerings,
                                    List<Timeslot> timeSlots,
@@ -250,19 +317,21 @@ public class ScheduleService {
                                  Map<String, SubjectOffering> roomTimeOwner,
                                  Map<String, SubjectOffering> sectionTimeOwner) {
         if (o.getTimeslot() == null) return false;
-        String timeKey = o.getTimeslot().getDay() + "|" + o.getTimeslot().getStartTime();
 
-        if (o.getFaculty() != null) {
-            String key = o.getFaculty().getId() + "|" + timeKey;
-            if (facultyTimeOwner.containsKey(key)) return true;
-        }
-        if (o.getRoom() != null) {
-            String key = o.getRoom().getRoomCode() + "|" + timeKey;
-            if (roomTimeOwner.containsKey(key)) return true;
-        }
-        if (o.getSection() != null) {
-            String key = o.getSection().getId() + "|" + timeKey;
-            if (sectionTimeOwner.containsKey(key)) return true;
+        List<String> blockKeys = buildBlockTimeKeys(o);
+        for (String timeKey : blockKeys) {
+            if (o.getFaculty() != null) {
+                String key = o.getFaculty().getId() + "|" + timeKey;
+                if (facultyTimeOwner.containsKey(key)) return true;
+            }
+            if (o.getRoom() != null) {
+                String key = o.getRoom().getRoomCode() + "|" + timeKey;
+                if (roomTimeOwner.containsKey(key)) return true;
+            }
+            if (o.getSection() != null) {
+                String key = o.getSection().getId() + "|" + timeKey;
+                if (sectionTimeOwner.containsKey(key)) return true;
+            }
         }
         return false;
     }
@@ -272,16 +341,18 @@ public class ScheduleService {
                                 Map<String, SubjectOffering> roomTimeOwner,
                                 Map<String, SubjectOffering> sectionTimeOwner) {
         if (o.getTimeslot() == null) return;
-        String timeKey = o.getTimeslot().getDay() + "|" + o.getTimeslot().getStartTime();
 
-        if (o.getFaculty() != null) {
-            facultyTimeOwner.put(o.getFaculty().getId() + "|" + timeKey, o);
-        }
-        if (o.getRoom() != null) {
-            roomTimeOwner.put(o.getRoom().getRoomCode() + "|" + timeKey, o);
-        }
-        if (o.getSection() != null) {
-            sectionTimeOwner.put(o.getSection().getId() + "|" + timeKey, o);
+        List<String> blockKeys = buildBlockTimeKeys(o);
+        for (String timeKey : blockKeys) {
+            if (o.getFaculty() != null) {
+                facultyTimeOwner.put(o.getFaculty().getId() + "|" + timeKey, o);
+            }
+            if (o.getRoom() != null) {
+                roomTimeOwner.put(o.getRoom().getRoomCode() + "|" + timeKey, o);
+            }
+            if (o.getSection() != null) {
+                sectionTimeOwner.put(o.getSection().getId() + "|" + timeKey, o);
+            }
         }
     }
 
@@ -296,55 +367,64 @@ public class ScheduleService {
         Collections.shuffle(shuffledSlots, new Random(System.nanoTime() + o.hashCode()));
 
         List<Faculty> qualifiedFaculty = decisionTreeService.matchFacultyToCourse(o.getCourse());
-        if (qualifiedFaculty.isEmpty()) qualifiedFaculty = allFaculty;
+        int duration = o.getCourse().getDurationHours() != null
+            ? o.getCourse().getDurationHours() : 3;
 
         List<Room> candidateRooms = new ArrayList<>(rooms);
-        if (Boolean.TRUE.equals(o.getCourse().getIsLaboratory())) {
-            candidateRooms.sort(Comparator.comparing((Room r) ->
-                !"LABORATORY".equals(r.getRoomType())));
-        }
 
-        // Pass 1: qualified faculty
         for (Timeslot ts : shuffledSlots) {
-            String timeKey = ts.getDay() + "|" + ts.getStartTime();
-            String secKey = o.getSection().getId() + "|" + timeKey;
-            if (sectionTimeOwner.containsKey(secKey)) continue;
+            List<String> blockKeys = new ArrayList<>();
+            LocalTime t = ts.getStartTime();
+            for (int k = 0; k < duration; k++) {
+                blockKeys.add(ts.getDay() + "|" + t);
+                t = t.plusHours(1);
+            }
+
+            // Section must be free across block
+            boolean sectionFree = true;
+            for (String bk : blockKeys) {
+                if (sectionTimeOwner.containsKey(o.getSection().getId() + "|" + bk)) {
+                    sectionFree = false; break;
+                }
+            }
+            if (!sectionFree) continue;
 
             for (Faculty f : qualifiedFaculty) {
-                String facKey = f.getId() + "|" + timeKey;
-                if (facultyTimeOwner.containsKey(facKey)) continue;
+                boolean facAvail = true;
+                if (f.getAvailableStartTime() != null && f.getAvailableEndTime() != null) {
+                    LocalTime cur = ts.getStartTime();
+                    for (int k = 0; k < duration; k++) {
+                        if (cur.isBefore(f.getAvailableStartTime())
+                            || cur.plusHours(1).isAfter(f.getAvailableEndTime())) {
+                            facAvail = false; break;
+                        }
+                        cur = cur.plusHours(1);
+                    }
+                }
+                if (!facAvail) continue;
+
+                boolean facFree = true;
+                for (String bk : blockKeys) {
+                    if (facultyTimeOwner.containsKey(f.getId() + "|" + bk)) {
+                        facFree = false; break;
+                    }
+                }
+                if (!facFree) continue;
 
                 for (Room r : candidateRooms) {
-                    String roomKey = r.getRoomCode() + "|" + timeKey;
-                    if (roomTimeOwner.containsKey(roomKey)) continue;
+                    boolean roomFree = true;
+                    for (String bk : blockKeys) {
+                        if (roomTimeOwner.containsKey(r.getRoomCode() + "|" + bk)) {
+                            roomFree = false; break;
+                        }
+                    }
+                    if (!roomFree) continue;
 
                     if (o.getSection().getExpectedEnrollment() != null
                         && r.getCapacity() != null
                         && o.getSection().getExpectedEnrollment() > r.getCapacity()) {
                         continue;
                     }
-
-                    o.setTimeslot(ts);
-                    o.setFaculty(f);
-                    o.setRoom(r);
-                    return true;
-                }
-            }
-        }
-
-        // Pass 2: any faculty
-        for (Timeslot ts : shuffledSlots) {
-            String timeKey = ts.getDay() + "|" + ts.getStartTime();
-            String secKey = o.getSection().getId() + "|" + timeKey;
-            if (sectionTimeOwner.containsKey(secKey)) continue;
-
-            for (Faculty f : allFaculty) {
-                String facKey = f.getId() + "|" + timeKey;
-                if (facultyTimeOwner.containsKey(facKey)) continue;
-
-                for (Room r : candidateRooms) {
-                    String roomKey = r.getRoomCode() + "|" + timeKey;
-                    if (roomTimeOwner.containsKey(roomKey)) continue;
 
                     o.setTimeslot(ts);
                     o.setFaculty(f);
@@ -403,7 +483,7 @@ public class ScheduleService {
     }
 
     // ============================================================
-    // COMPARE ALGORITHMS (realistic benchmarks)
+    // COMPARE ALGORITHMS
     // ============================================================
     public Map<String, Object> compareAlgorithms(String semester, String academicYear) {
         Map<String, Object> result = new HashMap<>();
@@ -416,7 +496,6 @@ public class ScheduleService {
             List<Section> sections = sectionRepository.findAll();
             List<Course> courses = courseRepository.findAll();
 
-            // GREEDY
             long start = System.currentTimeMillis();
             Map<String, Object> greedy = runComparison(
                 allFaculty, rooms, timeSlots, sections, courses, "GREEDY");
@@ -424,7 +503,6 @@ public class ScheduleService {
             greedy.put("timeMs", System.currentTimeMillis() - start);
             comparisons.add(greedy);
 
-            // GRAPH COLORING
             start = System.currentTimeMillis();
             Map<String, Object> gc = runComparison(
                 allFaculty, rooms, timeSlots, sections, courses, "GRAPH");
@@ -432,7 +510,6 @@ public class ScheduleService {
             gc.put("timeMs", System.currentTimeMillis() - start);
             comparisons.add(gc);
 
-            // HYBRID
             start = System.currentTimeMillis();
             Map<String, Object> hybrid = runComparison(
                 allFaculty, rooms, timeSlots, sections, courses, "HYBRID");
@@ -452,43 +529,24 @@ public class ScheduleService {
         return result;
     }
 
-        // ============================================================
-    // RUN ONE COMPARISON (per-algorithm simulation)
-    // ============================================================
     private Map<String, Object> runComparison(List<Faculty> allFaculty, List<Room> rooms,
                                                List<Timeslot> timeSlots, List<Section> sections,
                                                List<Course> courses, String algorithm) {
-        
-        List<SubjectOffering> offerings = buildOfferings(sections, courses, "compare", "compare");
+
+        List<SubjectOffering> offerings = buildOfferings(sections, courses, "1st Semester", "compare");
 
         if ("GREEDY".equals(algorithm)) {
-            // =========================================================
-            // GREEDY: fully naive — no conflict awareness anywhere.
-            // Each offering gets a timeslot, faculty, and room by index.
-            // =========================================================
             for (int i = 0; i < offerings.size(); i++) {
                 SubjectOffering o = offerings.get(i);
                 o.setTimeslot(timeSlots.get(i % timeSlots.size()));
-
-                // Naive faculty: pick by index, ignore qualification, ignore load
-                if (!allFaculty.isEmpty()) {
-                    o.setFaculty(allFaculty.get(i % allFaculty.size()));
-                }
-
-                // Naive room: pick by index, ignore type, ignore occupancy
-                if (!rooms.isEmpty()) {
-                    o.setRoom(rooms.get(i % rooms.size()));
-                }
+                if (!allFaculty.isEmpty()) o.setFaculty(allFaculty.get(i % allFaculty.size()));
+                if (!rooms.isEmpty()) o.setRoom(rooms.get(i % rooms.size()));
             }
-
         } else if ("GRAPH".equals(algorithm)) {
-            // =========================================================
-            // GRAPH COLORING: real Welsh-Powell, smart faculty/room
-            // =========================================================
-            GraphColoringService.ConflictGraph graph = 
+            GraphColoringService.ConflictGraph graph =
                 graphColoringService.buildConflictGraph(offerings, allFaculty, decisionTreeService);
-            GraphColoringService.ColoringResult coloring = 
-                graphColoringService.greedyColor(graph, timeSlots, 0L);
+            GraphColoringService.ColoringResult coloring =
+                graphColoringService.greedyColor(graph, timeSlots, 0L, allFaculty, decisionTreeService);
 
             Map<String, SubjectOffering> byId = new HashMap<>();
             for (SubjectOffering o : offerings) {
@@ -500,17 +558,13 @@ public class ScheduleService {
                     o.setTimeslot(timeSlots.get(e.getValue()));
                 }
             }
-
             assignFacultyAndRooms(offerings, allFaculty, rooms);
-
         } else if ("HYBRID".equals(algorithm)) {
-            // =========================================================
-            // HYBRID: GC + GA + Repair (full pipeline)
-            // =========================================================
-            GraphColoringService.ConflictGraph graph = 
+            GraphColoringService.ConflictGraph graph =
                 graphColoringService.buildConflictGraph(offerings, allFaculty, decisionTreeService);
-            GraphColoringService.ColoringResult coloring = 
-                graphColoringService.greedyColor(graph, timeSlots, System.nanoTime());
+            GraphColoringService.ColoringResult coloring =
+                graphColoringService.greedyColor(graph, timeSlots, System.nanoTime(),
+                    allFaculty, decisionTreeService);
 
             Map<String, SubjectOffering> byId = new HashMap<>();
             for (SubjectOffering o : offerings) {
@@ -522,17 +576,10 @@ public class ScheduleService {
                     o.setTimeslot(timeSlots.get(e.getValue()));
                 }
             }
-
-            // Smart assignment
             assignFacultyAndRooms(offerings, allFaculty, rooms);
-
-            // Repair conflicts (final polish)
             repairGAConflicts(offerings, timeSlots, rooms, allFaculty, sections);
         }
 
-        // =========================================================
-        // COUNT CONFLICTS (same logic as BacktrackingService)
-        // =========================================================
         Map<String, SubjectOffering> facultyTimeOwner = new HashMap<>();
         Map<String, SubjectOffering> roomTimeOwner = new HashMap<>();
         Map<String, SubjectOffering> sectionTimeOwner = new HashMap<>();
@@ -540,43 +587,45 @@ public class ScheduleService {
         int sectionConflicts = 0;
         int facultyConflicts = 0;
         int roomConflicts = 0;
+        int unassigned = 0;
 
         for (SubjectOffering o : offerings) {
-            if (o.getTimeslot() == null || o.getSection() == null) continue;
-            String timeKey = o.getTimeslot().getDay() + "|" + o.getTimeslot().getStartTime();
-
-            // Faculty conflict
-            if (o.getFaculty() != null) {
-                String key = o.getFaculty().getId() + "|" + timeKey;
-                if (facultyTimeOwner.containsKey(key)) {
-                    facultyConflicts++;
-                } else {
-                    facultyTimeOwner.put(key, o);
-                }
+            if (o.getTimeslot() == null || o.getSection() == null
+                || o.getFaculty() == null || o.getRoom() == null) {
+                unassigned++;
+                continue;
             }
 
-            // Room conflict
-            if (o.getRoom() != null) {
-                String key = o.getRoom().getRoomCode() + "|" + timeKey;
-                if (roomTimeOwner.containsKey(key)) {
-                    roomConflicts++;
-                } else {
-                    roomTimeOwner.put(key, o);
+            List<String> blockKeys = buildBlockTimeKeys(o);
+            for (String timeKey : blockKeys) {
+                if (o.getFaculty() != null) {
+                    String key = o.getFaculty().getId() + "|" + timeKey;
+                    if (facultyTimeOwner.containsKey(key)) {
+                        facultyConflicts++;
+                    } else {
+                        facultyTimeOwner.put(key, o);
+                    }
                 }
-            }
-
-            // Section conflict
-            String secKey = o.getSection().getId() + "|" + timeKey;
-            if (sectionTimeOwner.containsKey(secKey)) {
-                sectionConflicts++;
-            } else {
-                sectionTimeOwner.put(secKey, o);
+                if (o.getRoom() != null) {
+                    String key = o.getRoom().getRoomCode() + "|" + timeKey;
+                    if (roomTimeOwner.containsKey(key)) {
+                        roomConflicts++;
+                    } else {
+                        roomTimeOwner.put(key, o);
+                    }
+                }
+                String secKey = o.getSection().getId() + "|" + timeKey;
+                if (sectionTimeOwner.containsKey(secKey)) {
+                    sectionConflicts++;
+                } else {
+                    sectionTimeOwner.put(secKey, o);
+                }
             }
         }
 
-        int totalConflicts = sectionConflicts + facultyConflicts + roomConflicts;
+        int totalConflicts = sectionConflicts + facultyConflicts + roomConflicts + unassigned;
         int totalOfferings = offerings.size();
-        double cfsr = totalOfferings == 0 ? 100.0 : 
+        double cfsr = totalOfferings == 0 ? 100.0 :
             Math.round((1.0 - (double) totalConflicts / totalOfferings) * 10000.0) / 100.0;
 
         Map<String, Object> result = new HashMap<>();
@@ -585,6 +634,7 @@ public class ScheduleService {
         result.put("sectionConflicts", sectionConflicts);
         result.put("facultyConflicts", facultyConflicts);
         result.put("roomConflicts", roomConflicts);
+        result.put("unassigned", unassigned);
         result.put("cfsr", Math.max(0, cfsr));
 
         return result;
@@ -593,38 +643,48 @@ public class ScheduleService {
     // ============================================================
     // BUILD OFFERINGS
     // ============================================================
-    private List<SubjectOffering> buildOfferings(List<Section> sections, 
+    private List<SubjectOffering> buildOfferings(List<Section> sections,
                                                   List<Course> courses,
                                                   String semester, String academicYear) {
-        List<SubjectOffering> offerings = new ArrayList<>();
-        Map<Integer, List<Course>> coursesByYear = courses.stream()
-            .collect(Collectors.toMap(Course::getId, c -> c, (a, b) -> a))
-            .values().stream()
-            .collect(Collectors.groupingBy(Course::getYearLevel));
 
-        Map<String, Section> uniqueSections = sections.stream()
-            .collect(Collectors.toMap(Section::getSectionCode, s -> s, (a, b) -> a));
+        List<SubjectOffering> offerings = new ArrayList<>();
+        int semesterNum = mapSemesterToNumber(semester);
+
+        Map<String, List<Course>> coursesByKey = new HashMap<>();
+        for (Course c : courses) {
+            if (c.getSemester() == null) continue;
+            String key = c.getYearLevel() + "|" + c.getProgram() + "|" + c.getSemester();
+            coursesByKey.computeIfAbsent(key, k -> new ArrayList<>()).add(c);
+        }
+
+        Map<String, Section> uniqueSections = new LinkedHashMap<>();
+        for (Section s : sections) {
+            uniqueSections.putIfAbsent(s.getSectionCode(), s);
+        }
 
         Set<String> seen = new HashSet<>();
 
         for (Section section : uniqueSections.values()) {
-            List<Course> eligible = coursesByYear.getOrDefault(section.getYearLevel(), new ArrayList<>());
-            List<Course> sectionCourses = eligible.stream()
-                .filter(c -> c.getProgram().equals(section.getProgram()))
-                .collect(Collectors.toMap(Course::getId, c -> c, (a, b) -> a))
-                .values().stream().limit(6).collect(Collectors.toList());
+            String key = section.getYearLevel() + "|" + section.getProgram() + "|" + semesterNum;
+            List<Course> sectionCourses = coursesByKey.getOrDefault(key, new ArrayList<>());
 
             if (sectionCourses.isEmpty()) {
-                sectionCourses = eligible.stream()
-                    .filter(c -> c.getProgram().equals("BSCS"))
-                    .collect(Collectors.toMap(Course::getId, c -> c, (a, b) -> a))
-                    .values().stream().limit(6).collect(Collectors.toList());
+                log.warn("⚠️ Section {} (Y{} {} Sem{}) has no matching courses",
+                    section.getSectionCode(),
+                    section.getYearLevel(),
+                    section.getProgram(),
+                    semesterNum);
+                continue;
             }
 
+            sectionCourses = sectionCourses.stream()
+                .sorted(Comparator.comparing(Course::getCourseCode))
+                .collect(Collectors.toList());
+
             for (Course course : sectionCourses) {
-                String key = section.getId() + "-" + course.getId();
-                if (seen.contains(key)) continue;
-                seen.add(key);
+                String key2 = section.getId() + "-" + course.getId();
+                if (seen.contains(key2)) continue;
+                seen.add(key2);
 
                 SubjectOffering o = new SubjectOffering();
                 o.setSection(section);
@@ -635,17 +695,29 @@ public class ScheduleService {
                 offerings.add(o);
             }
         }
+
+        log.info("📚 Built {} offerings for {} sections in semester {}",
+            offerings.size(), uniqueSections.size(), semesterNum);
+
         return offerings;
     }
 
+    private int mapSemesterToNumber(String semester) {
+        if (semester == null) return 1;
+        String s = semester.toLowerCase();
+        if (s.contains("2nd") || s.contains("second")) return 2;
+        return 1;
+    }
+
     // ============================================================
-    // ASSIGN FACULTY AND ROOMS (strictly respects maxLoad)
+    // ASSIGN FACULTY AND ROOMS
     // ============================================================
     private void assignFacultyAndRooms(List<SubjectOffering> offerings,
                                        List<Faculty> allFaculty,
                                        List<Room> rooms) {
-        offerings.sort(Comparator.comparing(o -> 
-            o.getTimeslot() != null 
+
+        offerings.sort(Comparator.comparing(o ->
+            o.getTimeslot() != null
                 ? o.getTimeslot().getDay() + o.getTimeslot().getStartTime().toString()
                 : ""));
 
@@ -664,108 +736,86 @@ public class ScheduleService {
         }
 
         int unassignedFaculty = 0;
+        int unassignedRoom = 0;
 
         for (SubjectOffering o : offerings) {
             if (o.getTimeslot() == null) continue;
             Section section = o.getSection();
             Course course = o.getCourse();
-            Timeslot ts = o.getTimeslot();
-            String timeKey = ts.getDay() + "|" + ts.getStartTime();
             int units = course.getUnits() != null ? course.getUnits() : 3;
+
+            List<String> blockKeys = buildBlockTimeKeys(o);
 
             // FACULTY
             List<Faculty> qualified = decisionTreeService.matchFacultyToCourse(course);
-            Faculty assignedFaculty = pickLeastLoaded(
-                qualified, facultyBusyTimes, facultyLoad, timeKey, units);
-
-            if (assignedFaculty == null) {
-                assignedFaculty = pickLeastLoaded(
-                    allFaculty, facultyBusyTimes, facultyLoad, timeKey, units);
-            }
+            Faculty assignedFaculty = pickFairestFacultyForBlock(
+                qualified, facultyBusyTimes, facultyLoad, blockKeys, units);
 
             if (assignedFaculty == null) {
                 unassignedFaculty++;
-                log.error("❌ Could not assign faculty for {} (section {}) within maxLoad — leaving unassigned",
+                log.warn("⚠️ No qualified+available faculty for {} (section {})",
                     course.getCourseCode(), section.getSectionCode());
             }
 
             if (assignedFaculty != null) {
                 String fid = assignedFaculty.getId().toString();
-                facultyBusyTimes.get(fid).add(timeKey);
+                for (String bk : blockKeys) {
+                    facultyBusyTimes.get(fid).add(bk);
+                }
                 facultyLoad.merge(fid, units, Integer::sum);
             }
             o.setFaculty(assignedFaculty);
 
-            // ROOM
-            List<Room> sortedRooms = new ArrayList<>(rooms);
-            sortedRooms.sort(Comparator.comparingInt(r -> 
-                roomUsage.getOrDefault(r.getRoomCode(), 0)));
+            // ROOM — enforce type for labs
+            boolean isLab = Boolean.TRUE.equals(course.getIsLaboratory());
+            String preferredType = isLab ? "LABORATORY" : "LECTURE";
+            Integer neededCapacity = section.getExpectedEnrollment();
 
-            if (Boolean.TRUE.equals(course.getIsLaboratory())) {
-                sortedRooms.sort(Comparator.comparing((Room r) -> 
-                    !"LABORATORY".equals(r.getRoomType())));
-            }
+            Room assignedRoom = pickRoomForBlock(
+                rooms, preferredType, neededCapacity,
+                roomBusyTimes, roomUsage, blockKeys, isLab);
 
-            Room assignedRoom = null;
-            for (Room r : sortedRooms) {
-                Set<String> busy = roomBusyTimes.get(r.getRoomCode());
-                if (busy != null && !busy.contains(timeKey)) {
-                    if (section.getExpectedEnrollment() != null
-                        && r.getCapacity() != null
-                        && section.getExpectedEnrollment() <= r.getCapacity()) {
-                        assignedRoom = r;
-                        break;
-                    }
-                }
-            }
             if (assignedRoom == null) {
-                for (Room r : sortedRooms) {
-                    Set<String> busy = roomBusyTimes.get(r.getRoomCode());
-                    if (busy != null && !busy.contains(timeKey)) {
-                        assignedRoom = r;
-                        break;
-                    }
+                unassignedRoom++;
+                log.warn("⚠️ No available room (any type) for {} (section {})",
+                    course.getCourseCode(), section.getSectionCode());
+            } else {
+                for (String bk : blockKeys) {
+                    roomBusyTimes.get(assignedRoom.getRoomCode()).add(bk);
                 }
-            }
-            if (assignedRoom == null && !sortedRooms.isEmpty()) {
-                assignedRoom = sortedRooms.get(0);
-            }
-
-            if (assignedRoom != null) {
-                roomBusyTimes.get(assignedRoom.getRoomCode()).add(timeKey);
                 roomUsage.merge(assignedRoom.getRoomCode(), 1, Integer::sum);
             }
             o.setRoom(assignedRoom);
         }
 
-        int maxLoadFound = 0;
-        int minLoadFound = Integer.MAX_VALUE;
-        int overloaded = 0;
-        for (Faculty f : allFaculty) {
-            String fid = f.getId().toString();
-            int load = facultyLoad.getOrDefault(fid, 0);
-            int max = f.getMaxLoadUnits() != null ? f.getMaxLoadUnits() : 24;
-            if (load > 0) {
-                maxLoadFound = Math.max(maxLoadFound, load);
-                minLoadFound = Math.min(minLoadFound, load);
-                if (load > max) overloaded++;
-            }
-        }
-        log.info("📊 Faculty loads: min={}, max={}, overloaded={}, unassigned-offerings={}",
-            minLoadFound == Integer.MAX_VALUE ? 0 : minLoadFound,
-            maxLoadFound, overloaded, unassignedFaculty);
+        log.info("📊 Faculty: unassigned={} | Rooms: unassigned={}",
+            unassignedFaculty, unassignedRoom);
     }
 
-    // ============================================================
-    // PICK LEAST-LOADED FACULTY (respects maxLoad + availability)
-    // ============================================================
-    private Faculty pickLeastLoaded(List<Faculty> candidates,
-                                     Map<String, Set<String>> facultyBusyTimes,
-                                     Map<String, Integer> facultyLoad,
-                                     String timeKey,
-                                     int unitsNeeded) {
+    private List<String> buildBlockTimeKeys(SubjectOffering o) {
+        List<String> keys = new ArrayList<>();
+        if (o.getTimeslot() == null) return keys;
+
+        int duration = o.getCourse() != null && o.getCourse().getDurationHours() != null
+            ? o.getCourse().getDurationHours() : 1;
+        duration = Math.max(1, Math.min(3, duration));
+
+        LocalTime t = o.getTimeslot().getStartTime();
+        String day = o.getTimeslot().getDay();
+        for (int i = 0; i < duration; i++) {
+            keys.add(day + "|" + t);
+            t = t.plusHours(1);
+        }
+        return keys;
+    }
+
+    private Faculty pickFairestFacultyForBlock(List<Faculty> candidates,
+                                                Map<String, Set<String>> facultyBusyTimes,
+                                                Map<String, Integer> facultyLoad,
+                                                List<String> blockKeys,
+                                                int unitsNeeded) {
         Faculty best = null;
-        int bestLoad = Integer.MAX_VALUE;
+        double bestRatio = Double.MAX_VALUE;
 
         for (Faculty f : candidates) {
             String fid = f.getId().toString();
@@ -774,23 +824,152 @@ public class ScheduleService {
             Set<String> busy = facultyBusyTimes.get(fid);
 
             if (busy == null) continue;
-            if (busy.contains(timeKey)) continue;
             if (currentLoad + unitsNeeded > maxLoad) continue;
 
-            if (currentLoad < bestLoad) {
-                bestLoad = currentLoad;
+            boolean allFree = true;
+            for (String bk : blockKeys) {
+                if (busy.contains(bk)) { allFree = false; break; }
+            }
+            if (!allFree) continue;
+
+            boolean availOK = true;
+            if (f.getAvailableStartTime() != null && f.getAvailableEndTime() != null) {
+                for (String bk : blockKeys) {
+                    LocalTime t = extractSlotStart(bk);
+                    if (t == null) continue;
+                    if (t.isBefore(f.getAvailableStartTime())
+                        || t.plusHours(1).isAfter(f.getAvailableEndTime())) {
+                        availOK = false;
+                        break;
+                    }
+                }
+            }
+            if (!availOK) continue;
+
+            double ratio = (double) currentLoad / maxLoad;
+            if (ratio < bestRatio
+                || (ratio == bestRatio && best != null
+                    && currentLoad < facultyLoad.getOrDefault(best.getId().toString(), 0))) {
+                bestRatio = ratio;
                 best = f;
             }
         }
         return best;
     }
 
+    private LocalTime extractSlotStart(String timeKey) {
+        if (timeKey == null) return null;
+        int pipeIdx = timeKey.indexOf('|');
+        if (pipeIdx < 0) return null;
+        String timePart = timeKey.substring(pipeIdx + 1).trim();
+        try {
+            if (timePart.length() == 5) {
+                return LocalTime.parse(timePart + ":00");
+            }
+            return LocalTime.parse(timePart);
+        } catch (Exception e) {
+            return null;
+        }
+    }
+
+    /**
+     * Pick room free for ALL blockKeys.
+     *
+     * If isLab == true, we ONLY return LABORATORY rooms. If none are free,
+     * we return null rather than letting a lab land in a lecture hall.
+     */
+    private Room pickRoomForBlock(List<Room> rooms,
+                                   String preferredType,
+                                   Integer neededCapacity,
+                                   Map<String, Set<String>> roomBusyTimes,
+                                   Map<String, Integer> roomUsage,
+                                   List<String> blockKeys,
+                                   boolean isLab) {
+
+        // Pass 1: preferred type + capacity
+        List<Room> pass1 = new ArrayList<>();
+        for (Room r : rooms) {
+            if (!preferredType.equalsIgnoreCase(r.getRoomType())) continue;
+            if (neededCapacity != null && r.getCapacity() != null
+                && neededCapacity > r.getCapacity()) continue;
+            Set<String> busy = roomBusyTimes.get(r.getRoomCode());
+            if (busy == null) continue;
+            boolean allFree = true;
+            for (String bk : blockKeys) {
+                if (busy.contains(bk)) { allFree = false; break; }
+            }
+            if (allFree) pass1.add(r);
+        }
+        if (!pass1.isEmpty()) {
+            pass1.sort(Comparator.comparingInt(r -> roomUsage.getOrDefault(r.getRoomCode(), 0)));
+            return pass1.get(0);
+        }
+
+        // Pass 2: preferred type, ignore capacity
+        List<Room> pass2 = new ArrayList<>();
+        for (Room r : rooms) {
+            if (!preferredType.equalsIgnoreCase(r.getRoomType())) continue;
+            Set<String> busy = roomBusyTimes.get(r.getRoomCode());
+            if (busy == null) continue;
+            boolean allFree = true;
+            for (String bk : blockKeys) {
+                if (busy.contains(bk)) { allFree = false; break; }
+            }
+            if (allFree) pass2.add(r);
+        }
+        if (!pass2.isEmpty()) {
+            pass2.sort(Comparator.comparingInt(r -> roomUsage.getOrDefault(r.getRoomCode(), 0)));
+            return pass2.get(0);
+        }
+
+        // For labs, do NOT fall back to lecture rooms. Return null → unassigned.
+        if (isLab) {
+            return null;
+        }
+
+        // Pass 3: any type + capacity
+        List<Room> pass3 = new ArrayList<>();
+        for (Room r : rooms) {
+            if (neededCapacity != null && r.getCapacity() != null
+                && neededCapacity > r.getCapacity()) continue;
+            Set<String> busy = roomBusyTimes.get(r.getRoomCode());
+            if (busy == null) continue;
+            boolean allFree = true;
+            for (String bk : blockKeys) {
+                if (busy.contains(bk)) { allFree = false; break; }
+            }
+            if (allFree) pass3.add(r);
+        }
+        if (!pass3.isEmpty()) {
+            pass3.sort(Comparator.comparingInt(r -> roomUsage.getOrDefault(r.getRoomCode(), 0)));
+            return pass3.get(0);
+        }
+
+        // Pass 4: any type, ignore capacity
+        List<Room> pass4 = new ArrayList<>();
+        for (Room r : rooms) {
+            Set<String> busy = roomBusyTimes.get(r.getRoomCode());
+            if (busy == null) continue;
+            boolean allFree = true;
+            for (String bk : blockKeys) {
+                if (busy.contains(bk)) { allFree = false; break; }
+            }
+            if (allFree) pass4.add(r);
+        }
+        if (!pass4.isEmpty()) {
+            pass4.sort(Comparator.comparingInt(r -> roomUsage.getOrDefault(r.getRoomCode(), 0)));
+            return pass4.get(0);
+        }
+
+        return null;
+    }
+
     // ============================================================
     // SAVE OFFERINGS
     // ============================================================
-    private void saveOfferings(List<SubjectOffering> offerings, 
+    private void saveOfferings(List<SubjectOffering> offerings,
                                 String semester, String academicYear) {
-        List<SubjectOffering> existing = 
+        List<SubjectOffering> existing =
             subjectOfferingRepository.findBySemesterAndAcademicYear(semester, academicYear);
         if (!existing.isEmpty()) {
             subjectOfferingRepository.deleteAll(existing);
@@ -816,7 +995,7 @@ public class ScheduleService {
     }
 
     // ============================================================
-    // METRIC CALCULATIONS
+    // METRICS
     // ============================================================
     private double calculateCFSR(BacktrackingService.ValidationResult v) {
         if (v.entries.isEmpty()) return 0;
@@ -857,7 +1036,7 @@ public class ScheduleService {
     // VIEW SCHEDULE
     // ============================================================
     public Map<String, Object> viewSchedule(String semester, String academicYear) {
-        List<SubjectOffering> offerings = 
+        List<SubjectOffering> offerings =
             subjectOfferingRepository.findBySemesterAndAcademicYear(semester, academicYear);
 
         Map<String, Object> result = new HashMap<>();
@@ -873,14 +1052,25 @@ public class ScheduleService {
             e.put("section", off.getSection().getSectionCode());
             e.put("program", off.getSection().getProgram());
             e.put("day", off.getTimeslot() != null ? off.getTimeslot().getDay() : "TBA");
-            e.put("time", off.getTimeslot() != null 
-                ? off.getTimeslot().getStartTime() + " - " + off.getTimeslot().getEndTime() 
-                : "TBA");
+
+            int dur = off.getCourse().getDurationHours() != null
+                ? off.getCourse().getDurationHours() : 3;
+            String timeDisplay = "TBA";
+            if (off.getTimeslot() != null) {
+                LocalTime start = off.getTimeslot().getStartTime();
+                LocalTime end = start.plusHours(dur);
+                timeDisplay = formatTime(start) + " - " + formatTime(end);
+            }
+            e.put("time", timeDisplay);
+
             e.put("room", off.getRoom() != null ? off.getRoom().getRoomCode() : "TBA");
-            e.put("faculty", off.getFaculty() != null 
-                ? off.getFaculty().getFirstName() + " " + off.getFaculty().getLastName() 
+            e.put("faculty", off.getFaculty() != null
+                ? off.getFaculty().getFirstName() + " " + off.getFaculty().getLastName()
                 : "Unassigned");
             e.put("isConflictFree", off.getIsConflictFree());
+            e.put("units", off.getCourse().getUnits() != null ? off.getCourse().getUnits() : 3);
+            e.put("durationHours", off.getCourse().getDurationHours() != null
+                ? off.getCourse().getDurationHours() : 3);
             entries.add(e);
         }
 
@@ -896,5 +1086,13 @@ public class ScheduleService {
         result.put("semester", semester);
         result.put("academicYear", academicYear);
         return result;
+    }
+
+    private String formatTime(LocalTime t) {
+        int hour = t.getHour();
+        String suffix = hour < 12 ? "AM" : "PM";
+        int displayHour = hour % 12;
+        if (displayHour == 0) displayHour = 12;
+        return String.format("%d:%02d %s", displayHour, t.getMinute(), suffix);
     }
 }

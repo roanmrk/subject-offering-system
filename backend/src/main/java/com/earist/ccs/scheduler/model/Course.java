@@ -51,6 +51,10 @@ public class Course {
     @Column(name = "is_laboratory")
     private Boolean isLaboratory = false;
 
+    // NEW: Duration in hours (1, 2, or 3)
+    @Column(name = "duration_hours")
+    private Integer durationHours = 3;
+
     @ManyToOne
     @JoinColumn(name = "prerequisite_course_id")
     private Course prerequisite;

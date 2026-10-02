@@ -1,14 +1,9 @@
 import React from 'react';
 import GhostFibers from './GhostFibers';
 
-/**
- * Reusable page background using GhostFibers.
- *
- * variant="dark"  → subtle blue fibers on very dark backdrop (Landing, Login)
- * variant="light" → dark fibers on light backdrop (Dashboards)
- */
 const PageBackground = ({ variant = 'dark' }) => {
   const isDark = variant === 'dark';
+  const fallbackColor = isDark ? '#0a0a0a' : '#fcf9f2';
 
   return (
     <div
@@ -17,13 +12,15 @@ const PageBackground = ({ variant = 'dark' }) => {
         inset: 0,
         zIndex: 0,
         pointerEvents: 'none',
-        // Pure dark backdrop
-        background: isDark ? '#000000' : 'transparent',
+        backgroundColor: fallbackColor,
+        background: fallbackColor,
+        width: '100vw',
+        height: '100vh',
       }}
     >
       <GhostFibers
-        lineColor={isDark ? '#1E3A5F' : '#1a1a1a'}       // very dark blue
-        glowColor={isDark ? '#0A1828' : '#c9c4b8'}        // near-black blue
+        lineColor={isDark ? '#1E3A5F' : '#1a1a1a'}
+        glowColor={isDark ? '#0A1828' : '#c9c4b8'}
         speed={0.15}
         scale={2}
         rotation={0}
@@ -40,10 +37,10 @@ const PageBackground = ({ variant = 'dark' }) => {
         lineSpacing={2}
         lineSharpness={16}
         glowFalloff={10}
-        glowIntensity={isDark ? 0.6 : 0.8}                // ↓ dimmer
-        brightness={isDark ? 1.2 : 1.6}                   // ↓ darker
-        blueBoost={isDark ? 1.4 : 1.0}                    // keep blue tint
-        vignette={isDark ? 0.9 : 0.7}                     // ↓ darker edges
+        glowIntensity={isDark ? 0.6 : 0.8}
+        brightness={isDark ? 1.2 : 1.6}
+        blueBoost={isDark ? 1.4 : 1.0}
+        vignette={isDark ? 0.9 : 0.7}
         grain={0.05}
         dpr={1}
         fps={45}

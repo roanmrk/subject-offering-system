@@ -69,10 +69,20 @@ const MetricsDashboard = () => {
       }
 
       const facultyWorkload = faculty.map(f => {
-        const facultyName = `${f.firstName} ${f.lastName}`;
-        const sections = schedules.filter(s => s.faculty === facultyName).length;
-        return { name: facultyName, sections, load: f.maxLoadUnits || 24 };
-      }).filter(f => f.sections > 0);
+    const facultyName = `${f.firstName} ${f.lastName}`;
+    const mySections = schedules.filter(s => s.faculty === facultyName);
+    const sections = mySections.length;
+    // Compute total UNITS by looking up each course
+    // But the API doesn't return units directly, so approximate:
+    // Assume each section = 2.5 units on average (mix of 2-unit Lec + 1-unit Lab)
+    const estimatedUnits = mySections.reduce((sum, s) => {
+        // Split Lec/Lab: Lec has 2 units, Lab has 1 unit
+        // But we don't have course.units from API
+        // Approximate: 2 units per section
+        return sum + 2;
+    }, 0);
+    return { name: facultyName, sections, units: estimatedUnits, load: f.maxLoadUnits || 24 };
+}).filter(f => f.sections > 0);
 
       const roomUtilization = rooms.map(r => {
         const usage = schedules.filter(s => s.room === r.roomCode).length;
@@ -99,11 +109,11 @@ const MetricsDashboard = () => {
     return '#991b1b';
   };
 
-  const getWorkloadColor = (sections, maxLoad) => {
-    const percentage = maxLoad > 0 ? ((sections * 3) / maxLoad) * 100 : 0;
-    if (percentage > 80) return '#991b1b';
-    if (percentage > 60) return '#e65100';
-    if (percentage > 40) return '#ff6b35';
+    const getWorkloadColor = (units, maxLoad) => {
+    const percentage = maxLoad > 0 ? (units / maxLoad) * 100 : 0;
+    if (percentage > 100) return '#991b1b';
+    if (percentage > 85) return '#e65100';
+    if (percentage > 60) return '#ff6b35';
     return '#4caf50';
   };
 
@@ -262,24 +272,24 @@ const MetricsDashboard = () => {
               <div className="workload-list">
                 {reports.facultyWorkload.map((faculty, index) => {
                   const percentage = faculty.load > 0
-                    ? Math.round(((faculty.sections * 3) / faculty.load) * 100)
-                    : 0;
+    ? Math.round(((faculty.units) / faculty.load) * 100)
+    : 0;
                   return (
                     <div key={index} className="workload-item">
                       <div className="workload-header">
                         <span className="workload-name">{faculty.name}</span>
                         <span className="workload-count">
                           {faculty.sections} sections
-                          <span style={{ marginLeft: '8px', fontWeight: 'bold', color: getWorkloadColor(faculty.sections, faculty.load) }}>
+                          <span style={{ marginLeft: '8px', fontWeight: 'bold', color: getWorkloadColor(faculty.units, faculty.load) }}>
                             ({percentage}%)
                           </span>
                         </span>
                       </div>
                       <div className="workload-bar">
-                        <div className="workload-fill" style={{
-                          width: `${Math.min(percentage, 100)}%`,
-                          backgroundColor: getWorkloadColor(faculty.sections, faculty.load)
-                        }}></div>
+                                            <div className="workload-fill" style={{
+                      width: `${Math.min(percentage, 100)}%`,
+                      backgroundColor: getWorkloadColor(faculty.units, faculty.load)
+                    }}></div>
                       </div>
                     </div>
                   );

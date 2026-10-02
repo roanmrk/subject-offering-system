@@ -3,15 +3,16 @@ package com.earist.ccs.scheduler.service;
 import com.earist.ccs.scheduler.model.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
 import java.util.*;
-import java.util.stream.Collectors;
 
 /**
  * Module 4: Genetic Algorithm
- * Optimizes assignment of faculty and rooms to minimize overload
- * and maximize facility usage.
  *
- * Supports optional seed for reproducible GA runs.
+ * Fitness = 0.3 * conflict-score + 0.5 * workload-balance + 0.2 * room-utilization
+ *
+ * The GA is *advisory*: ScheduleService only adopts GA output if it does
+ * not regress the number of assigned (faculty, room, timeslot) offerings.
  */
 @Service
 @Slf4j
@@ -43,17 +44,9 @@ public class GeneticAlgorithmService {
             this.facultyAssignment = new HashMap<>(f);
         }
 
-        public Map<String, Integer> chromosome() {
-            return timeAssignment;
-        }
-
-        public Map<String, String> roomMap() {
-            return roomAssignment;
-        }
-
-        public Map<String, String> facultyMap() {
-            return facultyAssignment;
-        }
+        public Map<String, Integer> chromosome() { return timeAssignment; }
+        public Map<String, String> roomMap() { return roomAssignment; }
+        public Map<String, String> facultyMap() { return facultyAssignment; }
     }
 
     public static class GAResult {
@@ -79,20 +72,10 @@ public class GeneticAlgorithmService {
         this.currentSeed = seed;
     }
 
-    /**
-     * Deterministic GA (backward-compatible).
-     */
     public GAResult optimize(Map<String, Integer> seedColoring) {
         return optimize(seedColoring, 0L);
     }
 
-    /**
-     * Runs the GA.
-     *
-     * @param seedColoring  Initial coloring from Graph Coloring (or null)
-     * @param seed          0  → non-reproducible (fresh Random each call)
-     *                      >0 → reproducible (fixed seed)
-     */
     public GAResult optimize(Map<String, Integer> seedColoring, long seed) {
         GAResult result = new GAResult();
         long start = System.currentTimeMillis();
@@ -178,10 +161,6 @@ public class GeneticAlgorithmService {
         return pop;
     }
 
-    /**
-     * Fitness = 0.3 * conflict-score + 0.5 * workload-balance + 0.2 * room-utilization.
-     * Workload balance weighted higher to improve FWOR.
-     */
     private double calculateFitness(Chromosome c) {
         double conflict = calculateConflictScore(c);
         double balance = calculateFacultyBalance(c);

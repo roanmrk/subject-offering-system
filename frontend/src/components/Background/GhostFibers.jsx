@@ -185,54 +185,78 @@ const GhostFibers = ({
     const container = containerRef.current;
     if (!container) return;
 
-    const renderer = new Renderer({
-      webgl: 2,
-      alpha: false,
-      antialias: false,
-      dpr: Math.min(Math.max(dpr, 0.5), 2)
-    });
+    // -----------------------------------------------------------
+    // WebGL init with graceful failure
+    // -----------------------------------------------------------
+    let renderer;
+    try {
+      renderer = new Renderer({
+        webgl: 2,
+        alpha: true,      // transparent canvas → parent's fallback color shows
+        antialias: false,
+        dpr: Math.min(Math.max(dpr, 0.5), 2)
+      });
+    } catch (err) {
+      console.warn('[GhostFibers] WebGL init failed — using fallback background:', err);
+      return;
+    }
+
     const gl = renderer.gl;
+    if (!gl) {
+      console.warn('[GhostFibers] WebGL context is null — using fallback background');
+      return;
+    }
+
     const canvas = gl.canvas;
     canvas.style.width = '100%';
     canvas.style.height = '100%';
     canvas.style.display = 'block';
+    canvas.style.position = 'absolute';
+    canvas.style.inset = 0;
     canvas.setAttribute('aria-hidden', 'true');
     container.appendChild(canvas);
 
-    const geometry = new Triangle(gl);
-    const program = new Program(gl, {
-      vertex,
-      fragment,
-      uniforms: {
-        uResolution: { value: new Float32Array([1, 1]) },
-        uTime: { value: 0 },
-        uSpeed: { value: 0.2 },
-        uScale: { value: 2 },
-        uRotation: { value: 0 },
-        uRotationSpeed: { value: 0.25 },
-        uLayers: { value: 4 },
-        uWaveAmplitude: { value: 0.015 },
-        uWaveFrequency: { value: 3 },
-        uWaveSpeed: { value: 0.15 },
-        uLayerSpeed: { value: 0.08 },
-        uTwist: { value: 0.1 },
-        uTwistFrequency: { value: 5 },
-        uTwistSpeed: { value: 1.2 },
-        uLineFrequency: { value: 5 },
-        uLineSpacing: { value: 2 },
-        uLineSharpness: { value: 16 },
-        uGlowFalloff: { value: 10 },
-        uGlowIntensity: { value: 1.6 },
-        uBrightness: { value: 2 },
-        uBlueBoost: { value: 1.25 },
-        uVignette: { value: 0.8 },
-        uGrain: { value: 0.05 },
-        uLightMode: { value: 0 },
-        uLineColor: { value: new Float32Array(hexToRgb('#140E35')) },
-        uGlowColor: { value: new Float32Array(hexToRgb('#3437A0')) }
-      }
-    });
-    const mesh = new Mesh(gl, { geometry, program });
+    let geometry, program, mesh;
+    try {
+      geometry = new Triangle(gl);
+      program = new Program(gl, {
+        vertex,
+        fragment,
+        uniforms: {
+          uResolution: { value: new Float32Array([1, 1]) },
+          uTime: { value: 0 },
+          uSpeed: { value: 0.2 },
+          uScale: { value: 2 },
+          uRotation: { value: 0 },
+          uRotationSpeed: { value: 0.25 },
+          uLayers: { value: 4 },
+          uWaveAmplitude: { value: 0.015 },
+          uWaveFrequency: { value: 3 },
+          uWaveSpeed: { value: 0.15 },
+          uLayerSpeed: { value: 0.08 },
+          uTwist: { value: 0.1 },
+          uTwistFrequency: { value: 5 },
+          uTwistSpeed: { value: 1.2 },
+          uLineFrequency: { value: 5 },
+          uLineSpacing: { value: 2 },
+          uLineSharpness: { value: 16 },
+          uGlowFalloff: { value: 10 },
+          uGlowIntensity: { value: 1.6 },
+          uBrightness: { value: 2 },
+          uBlueBoost: { value: 1.25 },
+          uVignette: { value: 0.8 },
+          uGrain: { value: 0.05 },
+          uLightMode: { value: 0 },
+          uLineColor: { value: new Float32Array(hexToRgb('#140E35')) },
+          uGlowColor: { value: new Float32Array(hexToRgb('#3437A0')) }
+        }
+      });
+      mesh = new Mesh(gl, { geometry, program });
+    } catch (err) {
+      console.warn('[GhostFibers] Shader/program creation failed:', err);
+      if (canvas.parentNode === container) container.removeChild(canvas);
+      return;
+    }
 
     let frameId = 0;
     let elapsed = 0;
@@ -244,11 +268,19 @@ const GhostFibers = ({
     let isPageVisible = !document.hidden;
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
-    const render = () => renderer.render({ scene: mesh });
+    const render = () => {
+      try {
+        renderer.render({ scene: mesh });
+      } catch (err) {
+        // silently ignore render errors
+      }
+    };
+
     const stop = () => {
       if (frameId !== 0) cancelAnimationFrame(frameId);
       frameId = 0;
     };
+
     const canAnimate = () => isVisible && isPageVisible && !isPaused && !reducedMotion.matches;
 
     const loop = now => {
@@ -276,7 +308,9 @@ const GhostFibers = ({
 
     const setSize = () => {
       const rect = container.getBoundingClientRect();
-      renderer.setSize(Math.max(1, Math.floor(rect.width)), Math.max(1, Math.floor(rect.height)));
+      const w = Math.max(1, Math.floor(rect.width));
+      const h = Math.max(1, Math.floor(rect.height));
+      renderer.setSize(w, h);
       program.uniforms.uResolution.value[0] = gl.drawingBufferWidth;
       program.uniforms.uResolution.value[1] = gl.drawingBufferHeight;
       render();
@@ -297,6 +331,7 @@ const GhostFibers = ({
 
     const resizeObserver = new ResizeObserver(setSize);
     resizeObserver.observe(container);
+
     const intersectionObserver = new IntersectionObserver(
       ([entry]) => {
         isVisible = entry.isIntersecting;
@@ -306,6 +341,7 @@ const GhostFibers = ({
       { threshold: 0 }
     );
     intersectionObserver.observe(container);
+
     document.addEventListener('visibilitychange', handleVisibility);
     reducedMotion.addEventListener('change', handleReducedMotion);
 
@@ -338,7 +374,11 @@ const GhostFibers = ({
       reducedMotion.removeEventListener('change', handleReducedMotion);
       contexts.delete(container);
       if (canvas.parentNode === container) container.removeChild(canvas);
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
+      try {
+        gl.getExtension('WEBGL_lose_context')?.loseContext();
+      } catch (err) {
+        // ignore
+      }
     };
   }, [dpr]);
 
@@ -406,7 +446,18 @@ const GhostFibers = ({
     dpr
   ]);
 
-  return <div ref={containerRef} className={`ghost-fibers-container ${className}`.trim()} />;
+  return (
+    <div
+      ref={containerRef}
+      className={`ghost-fibers-container ${className}`.trim()}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+      }}
+    />
+  );
 };
 
 export default GhostFibers;

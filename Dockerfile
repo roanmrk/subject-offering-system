@@ -8,8 +8,8 @@ WORKDIR /frontend
 # Copy package files first (better layer caching)
 COPY frontend/package.json frontend/package-lock.json ./
 
-# Install dependencies
-RUN npm install --legacy-peer-deps
+# Install dependencies (npm ci uses the lockfile exactly)
+RUN npm ci --legacy-peer-deps
 
 # Copy frontend source
 COPY frontend/ ./
@@ -50,5 +50,8 @@ COPY --from=backend-build /app/target/*.jar app.jar
 # Expose port (Render will override with $PORT env var)
 EXPOSE 8080
 
-# Run the application
-ENTRYPOINT ["java", "-Dserver.port=${PORT:8080}", "-jar", "app.jar"]
+# Run the application.
+# NOTE: Do NOT pass -Dserver.port=${PORT:8080} here — the exec-form
+# ENTRYPOINT does not expand shell variables. Spring Boot already
+# reads server.port from application.properties which uses ${PORT:8080}.
+ENTRYPOINT ["java", "-jar", "app.jar"]

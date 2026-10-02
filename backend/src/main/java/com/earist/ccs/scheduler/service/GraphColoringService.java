@@ -3,18 +3,19 @@ package com.earist.ccs.scheduler.service;
 import com.earist.ccs.scheduler.model.*;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+
+import java.time.LocalTime;
 import java.util.*;
 
 /**
- * Module 3: Graph Coloring
- * 
- * Vertices = (section, course) offerings
- * Edges = conflicts between offerings
- * Colors = timeslots
- * 
- * Supports both deterministic coloring (seed = 0) and randomized
- * tie-breaking (seed != 0) so the pipeline can produce reproducible
- * or exploratory schedules.
+ * Module 3: Graph Coloring (faculty-availability-aware)
+ *
+ * Key improvement: when choosing a slot for an offering, only consider
+ * slots where AT LEAST ONE faculty QUALIFIED for that course is
+ * available for the whole block.
+ *
+ * This prevents the "everything at 7 AM" pathology where slots were
+ * chosen with no regard for whether anyone was actually available.
  */
 @Service
 @Slf4j
@@ -28,6 +29,7 @@ public class GraphColoringService {
             public String id;
             public SubjectOffering offering;
             public Integer color = -1;
+            public Set<Integer> occupiedSlots = new HashSet<>();
 
             public Vertex(String id, SubjectOffering offering) {
                 this.id = id;
@@ -77,9 +79,6 @@ public class GraphColoringService {
         public long seedUsed = 0L;
     }
 
-    /**
-     * Build conflict graph where vertices are (section, course) offerings.
-     */
     public ConflictGraph buildConflictGraph(List<SubjectOffering> offerings,
                                              List<Faculty> allFaculty,
                                              DecisionTreeService decisionTreeService) {
@@ -138,27 +137,36 @@ public class GraphColoringService {
             }
         }
 
-        log.info("📊 Conflict graph: {} offerings, {} edges",
-            offerings.size(), edges);
+        log.info("📊 Conflict graph: {} offerings, {} edges", offerings.size(), edges);
         return graph;
     }
 
-    /**
-     * Deterministic coloring (backward-compatible).
-     */
     public ColoringResult greedyColor(ConflictGraph graph, List<Timeslot> timeSlots) {
-        return greedyColor(graph, timeSlots, 0L);
+        return greedyColor(graph, timeSlots, 0L, null, null);
+    }
+
+    public ColoringResult greedyColor(ConflictGraph graph, List<Timeslot> timeSlots, long seed) {
+        return greedyColor(graph, timeSlots, seed, null, null);
+    }
+
+    public ColoringResult greedyColor(ConflictGraph graph,
+                                       List<Timeslot> timeSlots,
+                                       long seed,
+                                       List<Faculty> allFaculty) {
+        return greedyColor(graph, timeSlots, seed, allFaculty, null);
     }
 
     /**
-     * Welsh-Powell greedy coloring with day-spreading.
+     * Availability-aware greedy coloring.
      *
-     * @param seed  0  → deterministic tie-breaking
-     *              >0 → randomized tie-breaking
+     * @param allFaculty        full faculty list (for availability windows)
+     * @param decisionTreeService  used to match faculty to each course
      */
     public ColoringResult greedyColor(ConflictGraph graph,
                                        List<Timeslot> timeSlots,
-                                       long seed) {
+                                       long seed,
+                                       List<Faculty> allFaculty,
+                                       DecisionTreeService decisionTreeService) {
         ColoringResult result = new ColoringResult();
         long start = System.currentTimeMillis();
         result.seedUsed = seed;
@@ -171,19 +179,72 @@ public class GraphColoringService {
             return result;
         }
 
+        // Group slot indexes by day
         Map<String, List<Integer>> slotsByDay = new LinkedHashMap<>();
         for (int i = 0; i < timeSlots.size(); i++) {
             String day = timeSlots.get(i).getDay();
             slotsByDay.computeIfAbsent(day, k -> new ArrayList<>()).add(i);
         }
         List<String> days = new ArrayList<>(slotsByDay.keySet());
-        int totalDays = days.size();
 
         // ============================================================
-        // VALID COMPARATOR: pre-compute random keys for tie-breaking
+        // Precompute: for each course, which slot indices can be used?
+        //
+        // A slot index is "usable" for a course if AT LEAST ONE faculty
+        // qualified for that course is available at that time. Since
+        // courses can be 1, 2, or 3 hours long, we ALSO verify the whole
+        // block fits within the faculty's availability window.
         // ============================================================
+        boolean availabilityAware = allFaculty != null
+            && !allFaculty.isEmpty()
+            && decisionTreeService != null;
+
+        Map<Long, List<Integer>> courseUsableSlots = new HashMap<>();
+
+        if (availabilityAware) {
+            // Cache: courseId → qualified faculty list
+            Map<Long, List<Faculty>> courseQualifiedCache = new HashMap<>();
+
+            for (ConflictGraph.Vertex v : vertices) {
+                Course course = v.offering.getCourse();
+                if (course == null || course.getId() == null) continue;
+                if (courseUsableSlots.containsKey(course.getId())) continue;
+
+                List<Faculty> qualified = courseQualifiedCache.computeIfAbsent(
+                    course.getId(), k -> decisionTreeService.matchFacultyToCourse(course));
+
+                int duration = getCourseDuration(course);
+                List<Integer> usable = new ArrayList<>();
+
+                for (int i = 0; i < timeSlots.size(); i++) {
+                    Timeslot ts = timeSlots.get(i);
+                    // Verify whole block fits on the same day and no overflow
+                    if (!blockFitsOnDay(timeSlots, i, duration)) continue;
+
+                    // Verify at least one qualified faculty is available
+                    // for the whole block
+                    boolean someoneAvailable = false;
+                    for (Faculty f : qualified) {
+                        if (facultyAvailableForBlock(f, ts, duration)) {
+                            someoneAvailable = true;
+                            break;
+                        }
+                    }
+                    if (someoneAvailable) usable.add(i);
+                }
+
+                courseUsableSlots.put(course.getId(), usable);
+            }
+
+            int totalUsable = courseUsableSlots.values().stream()
+                .mapToInt(List::size).sum();
+            int totalPossible = courseUsableSlots.size() * timeSlots.size();
+            log.info("🎨 [MODULE 3] Availability-aware: {} usable of {} slot-course combinations",
+                totalUsable, totalPossible);
+        }
+
+        // Sort vertices by degree DESC (Welsh-Powell)
         final Random rand = (seed != 0L) ? new Random(seed) : null;
-
         final Map<String, Integer> tieBreakKey = new HashMap<>();
         if (rand != null) {
             for (ConflictGraph.Vertex v : vertices) {
@@ -195,63 +256,104 @@ public class GraphColoringService {
             int degDiff = Integer.compare(
                 graph.getNeighbors(v2.id).size(),
                 graph.getNeighbors(v1.id).size());
-
             if (degDiff != 0) return degDiff;
-
-            if (rand == null) {
-                // Deterministic tie-break by ID
-                return v1.id.compareTo(v2.id);
-            } else {
-                // Deterministic comparison on pre-computed random keys
-                return Integer.compare(
-                    tieBreakKey.get(v1.id),
-                    tieBreakKey.get(v2.id));
-            }
+            if (rand == null) return v1.id.compareTo(v2.id);
+            return Integer.compare(tieBreakKey.get(v1.id), tieBreakKey.get(v2.id));
         });
+
+        Set<Integer> globallyUsed = new HashSet<>();
+        Map<String, Integer> dayUsage = new HashMap<>();
+        Map<String, Integer> chosenStart = new HashMap<>();
 
         int totalDegree = 0;
 
-        for (int idx = 0; idx < vertices.size(); idx++) {
-            ConflictGraph.Vertex v = vertices.get(idx);
+        for (ConflictGraph.Vertex v : vertices) {
             totalDegree += graph.getNeighbors(v.id).size();
 
-            Set<Integer> usedColors = new HashSet<>();
+            int duration = getCourseDuration(v.offering.getCourse());
+
+            // Gather slots occupied by neighbors (block range)
+            Set<Integer> blockedSlots = new HashSet<>();
             for (String nId : graph.getNeighbors(v.id)) {
                 ConflictGraph.Vertex n = graph.getVertex(nId);
-                if (n != null && n.color >= 0) usedColors.add(n.color);
+                if (n != null) blockedSlots.addAll(n.occupiedSlots);
             }
 
-            int dayStart = idx % totalDays;
-            int color = -1;
+            // Usable slots for this course (availability-filtered if enabled)
+            List<Integer> usableSlotsForCourse = null;
+            if (availabilityAware && v.offering.getCourse() != null
+                && v.offering.getCourse().getId() != null) {
+                usableSlotsForCourse = courseUsableSlots.get(v.offering.getCourse().getId());
+            }
 
-            outer:
-            for (int d = 0; d < totalDays; d++) {
-                String day = days.get((dayStart + d) % totalDays);
+            // Sort days by usage ASC, so least-used day goes first
+            days.sort(Comparator.comparingInt(d -> dayUsage.getOrDefault(d, 0)));
+
+            int chosenColor = -1;
+
+            // Try each day, starting with least-used
+            for (String day : days) {
                 List<Integer> daySlots = slotsByDay.get(day);
-                for (Integer candidate : daySlots) {
-                    if (!usedColors.contains(candidate)) {
-                        color = candidate;
-                        break outer;
+                if (daySlots == null) continue;
+
+                for (int i = 0; i + duration - 1 < daySlots.size(); i++) {
+                    int startIdx = daySlots.get(i);
+                    boolean fits = true;
+
+                    for (int k = 0; k < duration; k++) {
+                        int gIdx = daySlots.get(i + k);
+
+                        // If availability-aware, restrict to usable slots
+                        if (usableSlotsForCourse != null
+                            && !usableSlotsForCourse.contains(gIdx)) {
+                            fits = false; break;
+                        }
+
+                        // Slot must not be globally used
+                        if (globallyUsed.contains(gIdx)) { fits = false; break; }
+
+                        // Slot must not be blocked by neighbors
+                        if (blockedSlots.contains(gIdx)) { fits = false; break; }
+                    }
+
+                    if (fits) {
+                        chosenColor = startIdx;
+                        break;
                     }
                 }
+
+                if (chosenColor >= 0) break;
             }
 
-            if (color < 0) {
-                for (int c = 0; c < totalSlots; c++) {
-                    if (!usedColors.contains(c)) { color = c; break; }
+            // Fallback — pick any usable slot that fits
+            if (chosenColor < 0) {
+                log.warn("⚠️ Section {} / {} could not be placed cleanly — using fallback",
+                    v.offering.getSection().getSectionCode(),
+                    v.offering.getCourse().getCourseCode());
+                chosenColor = findFallbackSlot(days, slotsByDay, duration,
+                    timeSlots, usableSlotsForCourse);
+            }
+
+            // Mark slots as occupied
+            if (chosenColor >= 0 && chosenColor < timeSlots.size()) {
+                for (int k = 0; k < duration; k++) {
+                    int gIdx = chosenColor + k;
+                    if (gIdx < timeSlots.size()
+                        && timeSlots.get(gIdx).getDay()
+                            .equals(timeSlots.get(chosenColor).getDay())) {
+                        globallyUsed.add(gIdx);
+                        v.occupiedSlots.add(gIdx);
+                    }
                 }
+                String day = timeSlots.get(chosenColor).getDay();
+                dayUsage.merge(day, 1, Integer::sum);
             }
 
-            if (color < 0) {
-                log.warn("Section {} cannot be colored cleanly",
-                    v.offering.getSection().getSectionCode());
-                color = idx % totalSlots;
-            }
-
-            v.color = color;
-            result.coloring.put(v.id, color);
+            v.color = chosenColor;
+            chosenStart.put(v.id, chosenColor);
         }
 
+        result.coloring = chosenStart;
         result.vertexCount = vertices.size();
         result.edgeCount = graph.getEdgeCount();
         result.averageDegree = vertices.isEmpty() ? 0 : (double) totalDegree / vertices.size();
@@ -260,19 +362,89 @@ public class GraphColoringService {
         result.executionTimeMs = System.currentTimeMillis() - start;
 
         for (Integer c : result.coloring.values()) {
-            if (c < timeSlots.size()) {
+            if (c >= 0 && c < timeSlots.size()) {
                 String day = timeSlots.get(c).getDay();
                 result.dayDistribution.merge(day, 1, Integer::sum);
             }
         }
 
-        log.info("🎨 Graph coloring: {} offerings, {} edges, chromatic={}, {}ms (seed={})",
+        log.info("🎨 Graph coloring: {} offerings, {} edges, {}ms (seed={})",
             result.vertexCount, result.edgeCount,
-            result.chromaticNumber, result.executionTimeMs,
-            seed == 0L ? "deterministic" : seed);
+            result.executionTimeMs, seed == 0L ? "det" : seed);
         log.info("   Day distribution: {}", result.dayDistribution);
 
         return result;
+    }
+
+    /**
+     * Verify a duration-block starting at slotIndex stays within a single day.
+     */
+    private boolean blockFitsOnDay(List<Timeslot> timeSlots, int startIndex, int duration) {
+        if (startIndex + duration > timeSlots.size()) return false;
+        String day = timeSlots.get(startIndex).getDay();
+        for (int k = 1; k < duration; k++) {
+            if (!timeSlots.get(startIndex + k).getDay().equals(day)) return false;
+        }
+        // Also verify contiguity by time (no gap). In practice the DB is
+        // seeded with 1-hour consecutive slots, but let's be defensive.
+        LocalTime prev = timeSlots.get(startIndex).getStartTime();
+        for (int k = 1; k < duration; k++) {
+            LocalTime cur = timeSlots.get(startIndex + k).getStartTime();
+            if (!cur.equals(prev.plusHours(1))) return false;
+            prev = cur;
+        }
+        return true;
+    }
+
+    /**
+     * Verify a faculty member is available for the entire duration block.
+     */
+    private boolean facultyAvailableForBlock(Faculty f, Timeslot ts, int duration) {
+        if (f.getAvailableStartTime() == null || f.getAvailableEndTime() == null) {
+            return true; // unrestricted
+        }
+        LocalTime blockStart = ts.getStartTime();
+        LocalTime blockEnd = blockStart.plusHours(duration);
+
+        return !blockStart.isBefore(f.getAvailableStartTime())
+            && !blockEnd.isAfter(f.getAvailableEndTime());
+    }
+
+    private int findFallbackSlot(List<String> days,
+                                  Map<String, List<Integer>> slotsByDay,
+                                  int duration,
+                                  List<Timeslot> timeSlots,
+                                  List<Integer> usableSlotsForCourse) {
+        for (String day : days) {
+            List<Integer> daySlots = slotsByDay.get(day);
+            if (daySlots == null) continue;
+            for (int i = 0; i + duration - 1 < daySlots.size(); i++) {
+                boolean fits = true;
+                for (int k = 0; k < duration; k++) {
+                    int gIdx = daySlots.get(i + k);
+                    if (usableSlotsForCourse != null
+                        && !usableSlotsForCourse.contains(gIdx)) {
+                        fits = false; break;
+                    }
+                }
+                if (fits) return daySlots.get(i);
+            }
+        }
+        // Absolute last resort
+        if (usableSlotsForCourse != null && !usableSlotsForCourse.isEmpty()) {
+            return usableSlotsForCourse.get(0);
+        }
+        for (String day : days) {
+            List<Integer> daySlots = slotsByDay.get(day);
+            if (daySlots != null && !daySlots.isEmpty()) return daySlots.get(0);
+        }
+        return 0;
+    }
+
+    private int getCourseDuration(Course course) {
+        if (course == null || course.getDurationHours() == null) return 1;
+        int d = course.getDurationHours();
+        return Math.max(1, Math.min(3, d));
     }
 
     public static String offeringId(SubjectOffering o) {
